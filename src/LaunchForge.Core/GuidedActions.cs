@@ -69,6 +69,12 @@ public static class GuidedActions
                 var separator = projectDirectory.LastIndexOf(windows ? '\\' : '/');
                 arguments = separator >= 0 ? ["--prefix", projectDirectory[..separator], "run", task] : ["run", task];
             }
+            else if (kind == ProjectKind.JavaScript)
+            {
+                if (string.IsNullOrWhiteSpace(projectFile)) throw new InvalidDataException("Choose a JavaScript entry file, such as index.js.");
+                executable = "node";
+                arguments = [projectFile];
+            }
             else if (kind == ProjectKind.Python)
             {
                 if (string.IsNullOrWhiteSpace(projectFile)) throw new InvalidDataException("Choose a Python entry file, such as main.py.");

@@ -36,6 +36,8 @@ public static class ProjectDetector
                     catch (System.Xml.XmlException) { }
                 }
                 var package = Path.Combine(directory, "package.json");
+                bool hasPackageTasks = false;
+                string? packageEntry = null;
                 if (File.Exists(package))
                 {
                     try
@@ -50,10 +52,25 @@ public static class ProjectDetector
                                     tasks.Add(new(script.Name switch { "dev" => "Start development server", "start" => "Start application", "build" => "Build project", "test" => "Run tests", _ => script.Name }, script.Name));
                             }
                             var ordered = tasks.OrderBy(task => task.Value == "dev" ? 0 : task.Value == "start" ? 1 : 2).ToArray();
-                            result.Add(new($"Node.js · {Path.GetRelativePath(folder, package)}", ProjectKind.Node, Path.GetRelativePath(folder, package), ordered));
+                            hasPackageTasks = ordered.Length > 0;
+                            if (document.RootElement.TryGetProperty("main", out var main) && main.ValueKind == JsonValueKind.String) packageEntry = main.GetString();
+                            if (hasPackageTasks) result.Add(new($"JavaScript / Node.js · {Path.GetRelativePath(folder, package)}", ProjectKind.Node, Path.GetRelativePath(folder, package), ordered));
                         }
                     }
                     catch (JsonException) { }
+                }
+                if (!hasPackageTasks)
+                {
+                    var entries = Directory.EnumerateFiles(directory).Where(file => Path.GetExtension(file) is ".js" or ".mjs" or ".cjs")
+                        .Where(file => !Path.GetFileName(file).Contains(".config.", StringComparison.OrdinalIgnoreCase)).Take(50).ToList();
+                    if (!string.IsNullOrWhiteSpace(packageEntry))
+                    {
+                        var entry = Path.GetFullPath(Path.Combine(directory, packageEntry));
+                        var relativeEntry = Path.GetRelativePath(directory, entry);
+                        if (!relativeEntry.StartsWith("..", StringComparison.Ordinal) && Path.GetExtension(entry) is ".js" or ".mjs" or ".cjs" && File.Exists(entry) && !entries.Contains(entry)) entries.Add(entry);
+                    }
+                    foreach (var file in entries)
+                        result.Add(new($"JavaScript · {Path.GetRelativePath(folder, file)}", ProjectKind.JavaScript, Path.GetRelativePath(folder, file), [new("Run with Node.js", "run")]));
                 }
                 foreach (var file in new[] { "main.py", "app.py", "manage.py" }.Select(name => Path.Combine(directory, name)).Where(File.Exists))
                     result.Add(new($"Python · {Path.GetRelativePath(folder, file)}", ProjectKind.Python, Path.GetRelativePath(folder, file), [new(file.EndsWith("manage.py", StringComparison.OrdinalIgnoreCase) ? "Start Django server" : "Run application", "run")]));

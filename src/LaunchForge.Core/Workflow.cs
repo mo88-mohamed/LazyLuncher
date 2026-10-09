@@ -6,7 +6,7 @@ namespace LaunchForge.Core;
 public sealed class Workflow
 {
     public string Name { get; set; } = "My launcher";
-    public string WorkingDirectory { get; set; } = Environment.CurrentDirectory;
+    public string WorkingDirectory { get; set; } = "";
     public string IconPath { get; set; } = "";
     public List<WorkflowStep> Steps { get; set; } = [];
 
@@ -32,17 +32,34 @@ public sealed class Workflow
         return workflow;
     }
 
+    public string ProjectFolderFor(WorkflowStep step)
+    {
+        if (!string.IsNullOrWhiteSpace(step.WorkingDirectory)) return step.WorkingDirectory;
+        if (step.Kind == ActionKind.RunProject)
+        {
+            var index = Steps.IndexOf(step);
+            var previous = Steps.Take(Math.Max(0, index)).LastOrDefault(item => item.Kind == ActionKind.OpenVsCode);
+            if (previous is not null)
+                return !string.IsNullOrWhiteSpace(previous.Target) ? previous.Target
+                    : !string.IsNullOrWhiteSpace(previous.WorkingDirectory) ? previous.WorkingDirectory : WorkingDirectory;
+        }
+        return WorkingDirectory;
+    }
+
     public void Validate(bool windows)
     {
         if (string.IsNullOrWhiteSpace(Name)) throw new InvalidDataException("Give your workflow a name.");
         if (Steps is null || Steps.Count == 0) throw new InvalidDataException("Add at least one action.");
-        ValidateDirectory(WorkingDirectory);
         foreach (var step in Steps)
         {
             if (step is null) throw new InvalidDataException("An action is missing.");
             if (!Enum.IsDefined(step.Kind) || !Enum.IsDefined(step.ProjectKind) || !Enum.IsDefined(step.RunIn))
                 throw new InvalidDataException("This workflow contains an unsupported action type.");
-            var command = step.CommandFor(windows, WorkingDirectory);
+            var folder = ProjectFolderFor(step);
+            if (step.Kind == ActionKind.RunProject && string.IsNullOrWhiteSpace(folder))
+                throw new InvalidDataException($"Choose the project folder for '{step.Name}', or set it in the preceding VS Code action.");
+            ValidateDirectory(step.ExecutionFolder(folder));
+            var command = step.CommandFor(windows, folder);
             if (string.IsNullOrWhiteSpace(command))
                 throw new InvalidDataException($"Enter a {(windows ? "Windows" : "Linux")} command for '{step.Name}'.");
             if (windows && command.IndexOfAny(['\r', '\n']) >= 0)
@@ -79,5 +96,5 @@ public sealed class WorkflowStep
 }
 
 public enum ActionKind { CustomCommand, OpenVsCode, RunProject, OpenWebsite, OpenFolder, OpenApplication }
-public enum ProjectKind { Auto, DotNet, Node, Python }
+public enum ProjectKind { Auto, DotNet, Node, Python, JavaScript }
 public enum RunLocation { External, VsCode }

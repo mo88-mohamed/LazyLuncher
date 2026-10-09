@@ -12,7 +12,8 @@ public static class WorkflowRunner
         foreach (var step in workflow.Steps)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var folder = step.ExecutionFolder(workflow.WorkingDirectory);
+            var projectFolder = workflow.ProjectFolderFor(step);
+            var folder = step.ExecutionFolder(projectFolder);
             if (!Directory.Exists(folder)) throw new DirectoryNotFoundException($"Folder does not exist: {folder}");
             if (step.UsesVsCodeIntegration && !integrationReady)
             {
@@ -25,7 +26,7 @@ public static class WorkflowRunner
                 WorkingDirectory = folder,
                 UseShellExecute = false
             };
-            var command = step.CommandFor(windows, workflow.WorkingDirectory);
+            var command = step.CommandFor(windows, projectFolder);
             if (windows) info.Arguments = "/d /s /c \"" + command + "\"";
             else { info.ArgumentList.Add("-c"); info.ArgumentList.Add(command); }
             log?.Invoke($"Starting: {step.Name}");

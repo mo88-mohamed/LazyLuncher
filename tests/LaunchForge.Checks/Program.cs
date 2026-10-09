@@ -68,6 +68,23 @@ try
     var detected = ProjectDetector.Detect(projectRoot);
     Check(detected.Count == 3 && detected.Any(project => project.Kind == ProjectKind.DotNet) && detected.Any(project => project.Kind == ProjectKind.Python), "Detects .NET, Node and Python while excluding dependencies");
     Check(detected.Single(project => project.Kind == ProjectKind.Node).Tasks[0].Value == "dev", "Node task detection prefers the development server");
+    var javascriptRoot = Path.Combine(scratch, "javascript"); Directory.CreateDirectory(javascriptRoot);
+    foreach (var file in new[] { "index.js", "server.mjs", "app.cjs", "vite.config.js" }) await File.WriteAllTextAsync(Path.Combine(javascriptRoot, file), "console.log('example')");
+    await File.WriteAllTextAsync(Path.Combine(javascriptRoot, "package.json"), "{\"main\":\"index.js\"}");
+    var javascriptProjects = ProjectDetector.Detect(javascriptRoot);
+    Check(javascriptProjects.Count == 3 && javascriptProjects.All(project => project.Kind == ProjectKind.JavaScript), "Detects JS, MJS and CJS without npm scripts and skips configuration files");
+    var jsStep = new WorkflowStep { Kind = ActionKind.RunProject, ProjectKind = ProjectKind.JavaScript, ProjectFile = "index.js" };
+    var openProject = new WorkflowStep { Kind = ActionKind.OpenVsCode, Target = javascriptRoot };
+    var linkedWorkflow = Make(openProject, jsStep);
+    Check(linkedWorkflow.ProjectFolderFor(jsStep) == javascriptRoot, "Run project inherits the preceding VS Code folder instead of the general folder");
+    jsStep.WorkingDirectory = projectRoot;
+    Check(linkedWorkflow.ProjectFolderFor(jsStep) == projectRoot, "Explicit run project folder overrides the preceding VS Code folder");
+    jsStep.WorkingDirectory = ""; openProject.Target = projectRoot;
+    Check(linkedWorkflow.ProjectFolderFor(jsStep) == projectRoot, "Changing the preceding VS Code folder changes the inherited run folder");
+    openProject.Target = javascriptRoot;
+    Check(jsStep.CommandFor(false, javascriptRoot).Trim() == "'node' 'index.js'", "Standalone JavaScript uses Node.js with the selected entry file");
+    var missingFolder = new Workflow { Name = "Missing folder", Steps = [jsStep] };
+    try { missingFolder.Validate(OperatingSystem.IsWindows()); Check(false, "Missing project folder rejected"); } catch (InvalidDataException) { Check(true, "Missing project folder rejected"); }
     var custom = Command("echo custom", "printf custom");
     Check(custom.Kind == ActionKind.CustomCommand && custom.CommandFor(true, scratch) == "echo custom", "Existing custom commands remain unchanged");
     var vsTask = new WorkflowStep { Kind = ActionKind.RunProject, Name = "Start my project", ProjectKind = ProjectKind.Node, ProjectTask = "dev", RunIn = RunLocation.VsCode };
@@ -80,19 +97,26 @@ try
     if (OperatingSystem.IsWindows())
     {
         await File.WriteAllTextAsync(Path.Combine(toolsFolder, "dotnet.cmd"), "@echo off\r\necho %*>>\"%LAUNCHFORGE_TEST_LOG%\"\r\nexit /b 0\r\n");
+        await File.WriteAllTextAsync(Path.Combine(toolsFolder, "node.cmd"), "@echo off\r\ncd>>\"%LAUNCHFORGE_TEST_LOG%\"\r\necho %*>>\"%LAUNCHFORGE_TEST_LOG%\"\r\nexit /b 0\r\n");
         await File.WriteAllTextAsync(Path.Combine(toolsFolder, "code.cmd"), "@echo off\r\nif \"%~1\"==\"--list-extensions\" (\r\n if exist \"%LAUNCHFORGE_TEST_MARKER%\" echo launchforge.launcher\r\n exit /b 0\r\n)\r\nif \"%~1\"==\"--install-extension\" (\r\n if not exist \"%~2\" exit /b 8\r\n echo installed>\"%LAUNCHFORGE_TEST_MARKER%\"\r\n exit /b 0\r\n)\r\necho %*>>\"%LAUNCHFORGE_TEST_LOG%\"\r\nexit /b 0\r\n");
     }
     else
     {
         await File.WriteAllTextAsync(Path.Combine(toolsFolder, "dotnet"), $"#!/bin/bash\nprintf '%s\\n' \"$*\" >> {GuidedActions.ShellQuote(toolLog)}\n");
+        await File.WriteAllTextAsync(Path.Combine(toolsFolder, "node"), $"#!/bin/bash\npwd >> {GuidedActions.ShellQuote(toolLog)}\nprintf '%s\\n' \"$*\" >> {GuidedActions.ShellQuote(toolLog)}\n");
         await File.WriteAllTextAsync(Path.Combine(toolsFolder, "code"), $"#!/bin/bash\nif [ \"$1\" = --list-extensions ]; then [ ! -f {GuidedActions.ShellQuote(installedMarker)} ] || echo launchforge.launcher; exit 0; fi\nif [ \"$1\" = --install-extension ]; then test -f \"$2\" || exit 8; touch {GuidedActions.ShellQuote(installedMarker)}; exit 0; fi\nprintf '%s\\n' \"$*\" >> {GuidedActions.ShellQuote(toolLog)}\n");
-        foreach (var tool in new[] { "code", "dotnet" }) File.SetUnixFileMode(Path.Combine(toolsFolder, tool), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        foreach (var tool in new[] { "code", "dotnet", "node" }) File.SetUnixFileMode(Path.Combine(toolsFolder, tool), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
     try
     {
         Environment.SetEnvironmentVariable("LAUNCHFORGE_TEST_LOG", toolLog);
         Environment.SetEnvironmentVariable("LAUNCHFORGE_TEST_MARKER", installedMarker);
         Environment.SetEnvironmentVariable("PATH", toolsFolder + Path.PathSeparator + oldPath);
+        Check(await WorkflowRunner.RunAsync(linkedWorkflow) == 0 && (await File.ReadAllTextAsync(toolLog)).Contains(javascriptRoot), "JavaScript runner executes inside the inherited project folder");
+        File.Delete(toolLog);
+        await LauncherExporter.ExportAsync(linkedWorkflow, format, launcher);
+        Check(await Execute(launcher) == 0 && (await File.ReadAllTextAsync(toolLog)).Contains(javascriptRoot), "Exported JavaScript launcher preserves the inherited folder");
+        File.Delete(toolLog);
         var guided = Make(new WorkflowStep { Kind = ActionKind.RunProject, ProjectKind = ProjectKind.DotNet, ProjectTask = "build", ProjectFile = "App.csproj" });
         Check(await WorkflowRunner.RunAsync(guided) == 0 && (await File.ReadAllTextAsync(toolLog)).Contains("build"), "Guided action executes the selected project task without a user command");
         File.Delete(toolLog);

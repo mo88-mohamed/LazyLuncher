@@ -18,9 +18,9 @@ public static class LauncherExporter
         if (workflow.Steps.Any(step => step.UsesVsCodeIntegration)) result.AppendLine(VsCodeIntegration.LinuxBootstrap);
         foreach (var step in workflow.Steps)
         {
-            var folder = step.ExecutionFolder(workflow.WorkingDirectory);
+            var folder = step.ExecutionFolder(workflow.ProjectFolderFor(step));
             result.AppendLine($"printf '%s\\n' {ShellQuote("Starting: " + step.Name)}");
-            result.AppendLine($"(cd -- {ShellQuote(folder)} && bash -c {ShellQuote(step.CommandFor(false, workflow.WorkingDirectory))}){(step.WaitForExit ? "" : " &")}");
+            result.AppendLine($"(cd -- {ShellQuote(folder)} && bash -c {ShellQuote(step.CommandFor(false, workflow.ProjectFolderFor(step)))}){(step.WaitForExit ? "" : " &")}");
         }
         return result.ToString().Replace("\r\n", "\n");
     }
@@ -33,14 +33,14 @@ public static class LauncherExporter
         if (workflow.Steps.Any(step => step.UsesVsCodeIntegration)) script.AppendLine(VsCodeIntegration.WindowsBootstrap);
         foreach (var step in workflow.Steps)
         {
-            var folder = step.ExecutionFolder(workflow.WorkingDirectory);
+            var folder = step.ExecutionFolder(workflow.ProjectFolderFor(step));
             script.AppendLine($"[Console]::WriteLine({PowerShellQuote("Starting: " + step.Name)})");
             script.AppendLine($"if (-not (Test-Path -LiteralPath {PowerShellQuote(folder)} -PathType Container)) {{ throw 'Working folder does not exist.' }}");
             script.AppendLine("$info = New-Object System.Diagnostics.ProcessStartInfo");
             script.AppendLine("$info.FileName = 'cmd.exe'");
             script.AppendLine("$info.UseShellExecute = $false");
             script.AppendLine($"$info.WorkingDirectory = {PowerShellQuote(folder)}");
-            script.AppendLine($"$info.Arguments = {PowerShellQuote("/d /s /c \"" + step.CommandFor(true, workflow.WorkingDirectory) + "\"")}");
+            script.AppendLine($"$info.Arguments = {PowerShellQuote("/d /s /c \"" + step.CommandFor(true, workflow.ProjectFolderFor(step)) + "\"")}");
             script.AppendLine("$process = [System.Diagnostics.Process]::Start($info)");
             if (step.WaitForExit) script.AppendLine("$process.WaitForExit(); if ($process.ExitCode -ne 0) { exit $process.ExitCode }");
             script.AppendLine("$process.Dispose()");

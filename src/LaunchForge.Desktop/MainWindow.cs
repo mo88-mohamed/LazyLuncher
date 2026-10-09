@@ -75,7 +75,7 @@ public sealed class MainWindow : Window
     private static Workflow Example() => new()
     {
         Name = "Open and run my project",
-        WorkingDirectory = Environment.CurrentDirectory,
+        WorkingDirectory = "",
         Steps =
         [
             new() { Kind = ActionKind.OpenVsCode, Name = "Open project in VS Code" },
@@ -120,9 +120,9 @@ public sealed class MainWindow : Window
         name.Children.Add(nameRow);
         name.Margin = new Thickness(0, 0, 12, 0); setup.Children.Add(name);
         var folderGroup = new StackPanel { Spacing = 5 };
-        folderGroup.Children.Add(Label("Project folder"));
+        folderGroup.Children.Add(Label("Default project folder"));
         var folderRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-        var folderInput = Input(workflow.WorkingDirectory, value => workflow.WorkingDirectory = value);
+        var folderInput = Input(workflow.WorkingDirectory, value => { workflow.WorkingDirectory = value; ResetInheritedProjects(); });
         ToolTip.SetTip(folderInput, "Full folder path on the computer that will run the launcher.");
         folderRow.Children.Add(folderInput);
         var browse = AsyncButton("Browse", async () =>
@@ -273,7 +273,7 @@ public sealed class MainWindow : Window
         else
         {
             bool application = step.Kind == ActionKind.OpenApplication;
-            _details.Children.Add(Field(application ? "Application" : "Folder", step.Target, value => step.Target = value, application ? "Select an application or enter its name" : "Leave blank to use the project folder"));
+            _details.Children.Add(Field(application ? "Application" : "Folder", step.Target, value => { step.Target = value; if (step.Kind == ActionKind.OpenVsCode) ResetInheritedProjects(); }, application ? "Select an application or enter its name" : "Leave blank to use the default project folder"));
             _details.Children.Add(AsyncButton(application ? "Browse application..." : "Browse folder...", async () =>
             {
                 if (application)
@@ -284,7 +284,13 @@ public sealed class MainWindow : Window
                 else
                 {
                     var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Choose folder", AllowMultiple = false });
-                    if (folders.Count > 0 && folders[0].TryGetLocalPath() is { } path) step.Target = path;
+                    if (folders.Count > 0 && folders[0].TryGetLocalPath() is { } path)
+                    {
+                        step.Target = path;
+                        if (step.Kind == ActionKind.OpenVsCode) ResetInheritedProjects();
+                        var nextProject = _workflow.Steps.Skip(position + 1).FirstOrDefault(item => item.Kind == ActionKind.RunProject && string.IsNullOrWhiteSpace(item.WorkingDirectory));
+                        if (step.Kind == ActionKind.OpenVsCode && nextProject is not null) await DetectProjectsAsync(nextProject, applyToAll: true);
+                    }
                 }
                 RenderDetails();
             }));
@@ -313,7 +319,7 @@ public sealed class MainWindow : Window
         }
         var advanced = new StackPanel { Spacing = 10, Margin = new Thickness(0, 8, 0, 0) };
         advanced.Children.Add(Field("Action name", step.Name, value => { step.Name = value; actionLabel.Text = ActionTitle(position, step); }));
-        advanced.Children.Add(Field("Working folder", step.WorkingDirectory, value => step.WorkingDirectory = value, "Leave blank to use the project folder"));
+        if (step.Kind != ActionKind.RunProject) advanced.Children.Add(Field("Working folder", step.WorkingDirectory, value => step.WorkingDirectory = value, "Leave blank to use the default project folder"));
         _details.Children.Add(new Expander { Header = "Advanced options", Content = advanced, IsExpanded = !string.IsNullOrWhiteSpace(step.WorkingDirectory), HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12, Background = Surface, BorderBrush = Outline, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(7) });
     }
 
@@ -332,9 +338,34 @@ public sealed class MainWindow : Window
         _details.Children.Add(Hint(step.UsesVsCodeIntegration ? "Uses your configured VS Code terminal shell." : "Windows uses cmd.exe; Linux uses Bash."));
     }
 
+    private void ResetInheritedProjects()
+    {
+        foreach (var step in _workflow.Steps.Where(item => item.Kind == ActionKind.RunProject && string.IsNullOrWhiteSpace(item.WorkingDirectory)))
+        {
+            step.ProjectKind = ProjectKind.Auto; step.ProjectFile = ""; step.ProjectTask = "";
+        }
+    }
+
     private Control? RenderProjectOptions(WorkflowStep step)
     {
-        var folder = string.IsNullOrWhiteSpace(step.WorkingDirectory) ? _workflow.WorkingDirectory : step.WorkingDirectory;
+        var folder = _workflow.ProjectFolderFor(step);
+        var folderRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        folderRow.Children.Add(Input(step.WorkingDirectory, value => { step.WorkingDirectory = value; step.ProjectKind = ProjectKind.Auto; step.ProjectFile = ""; step.ProjectTask = ""; },
+            string.IsNullOrWhiteSpace(folder) ? "Choose the folder containing your project" : folder));
+        var browse = AsyncButton("Browse", async () =>
+        {
+            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Choose project to run", AllowMultiple = false });
+            if (folders.Count > 0 && folders[0].TryGetLocalPath() is { } path)
+            {
+                step.WorkingDirectory = path; step.ProjectKind = ProjectKind.Auto; step.ProjectFile = ""; step.ProjectTask = "";
+                await DetectProjectsAsync(step);
+            }
+        });
+        browse.Margin = new Thickness(6, 0, 0, 0); Grid.SetColumn(browse, 1); folderRow.Children.Add(browse);
+        _details.Children.Add(Labeled("Project folder for this action", folderRow));
+        _details.Children.Add(Hint(string.IsNullOrWhiteSpace(step.WorkingDirectory)
+            ? "Uses the preceding Open project in VS Code folder, then the default folder. Browse to choose another."
+            : "Uses this action's folder. Clear it to follow the preceding VS Code action."));
         if (_projects.TryGetValue(folder, out var detected) && detected.Count > 0)
         {
             int index = detected.ToList().FindIndex(project => project.Kind == step.ProjectKind && project.File == step.ProjectFile);
@@ -342,6 +373,7 @@ public sealed class MainWindow : Window
             projectChoice.SelectionChanged += (_, _) =>
             {
                 if (projectChoice.SelectedIndex < 0) return;
+                if (_workflow.ProjectFolderFor(step) != folder) { RenderDetails(); return; }
                 var project = detected[projectChoice.SelectedIndex];
                 if (step.ProjectKind == project.Kind && step.ProjectFile == project.File) return;
                 ApplyProject(step, project); RenderDetails();
@@ -355,14 +387,15 @@ public sealed class MainWindow : Window
         else
         {
             _details.Children.Add(AsyncButton("Detect project", () => DetectProjectsAsync(step)));
-            _details.Children.Add(Hint("Choose a folder above and detect its projects, or select a type."));
-            var type = new ComboBox { ItemsSource = new[] { "Detect automatically", ".NET", "Node.js", "Python" }, SelectedIndex = (int)step.ProjectKind, HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12 };
+            _details.Children.Add(Hint("Detect package.json tasks or JavaScript entry files, .NET projects, and Python apps."));
+            var type = new ComboBox { ItemsSource = new[] { "Detect automatically", ".NET", "JavaScript / Node.js (npm tasks)", "Python", "JavaScript file (Node.js)" }, SelectedIndex = (int)step.ProjectKind, HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12 };
             type.SelectionChanged += (_, _) => { if (type.SelectedIndex >= 0 && (int)step.ProjectKind != type.SelectedIndex) { step.ProjectKind = (ProjectKind)type.SelectedIndex; step.ProjectTask = ""; RenderDetails(); } };
             _details.Children.Add(Labeled("Project type", type));
             if (step.ProjectKind != ProjectKind.Auto)
-                _details.Children.Add(Field("Project file (relative to project folder)", step.ProjectFile, value => step.ProjectFile = value, step.ProjectKind == ProjectKind.DotNet ? "MyApp.csproj (optional)" : step.ProjectKind == ProjectKind.Node ? "package.json (optional)" : "main.py"));
+                _details.Children.Add(Field("Project file (relative to project folder)", step.ProjectFile, value => step.ProjectFile = value, step.ProjectKind == ProjectKind.DotNet ? "MyApp.csproj (optional)" : step.ProjectKind == ProjectKind.Node ? "package.json (optional)" : step.ProjectKind == ProjectKind.JavaScript ? "index.js, app.mjs or server.cjs" : "main.py"));
             if (step.ProjectKind == ProjectKind.DotNet) return TaskChoice(step, ProjectDetector.DotNetTasks);
             if (step.ProjectKind == ProjectKind.Node) return Field("Task name", step.ProjectTask, value => step.ProjectTask = value, "dev or start");
+            if (step.ProjectKind is ProjectKind.JavaScript or ProjectKind.Python) return TaskChoice(step, [new("Run application", "run")]);
         }
         return null;
     }
@@ -380,7 +413,8 @@ public sealed class MainWindow : Window
     private async Task DetectProjectsAsync(WorkflowStep step, bool applyToAll = false)
     {
         var workflow = _workflow;
-        var folder = string.IsNullOrWhiteSpace(step.WorkingDirectory) ? workflow.WorkingDirectory : step.WorkingDirectory;
+        var folder = workflow.ProjectFolderFor(step);
+        if (string.IsNullOrWhiteSpace(folder)) { Log("Choose the project folder for this action, or set a folder in the preceding VS Code action."); return; }
         await WithOperationAsync(async token =>
         {
             Log("Detecting projects...");
@@ -389,7 +423,7 @@ public sealed class MainWindow : Window
             _projects[folder] = detected;
             if (detected.Count > 0)
             {
-                foreach (var candidate in applyToAll ? workflow.Steps.Where(item => item.Kind == ActionKind.RunProject && string.IsNullOrWhiteSpace(item.WorkingDirectory)) : [step])
+                foreach (var candidate in applyToAll ? workflow.Steps.Where(item => item.Kind == ActionKind.RunProject && string.Equals(workflow.ProjectFolderFor(item), folder, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) : [step])
                     ApplyProject(candidate, detected.FirstOrDefault(project => project.Kind == candidate.ProjectKind && project.File == candidate.ProjectFile) ?? detected[0]);
             }
             RenderDetails();

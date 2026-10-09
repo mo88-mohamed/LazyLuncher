@@ -10,12 +10,12 @@ Choose actions and fill in simple options. Commands are optional: **Custom comma
 
 ## Guided actions
 
-- **Run a project**: detect .NET, Node.js, or common Python entry points and select a task.
+- **Run a project**: detect .NET, JavaScript / Node.js, or common Python entry points and select a task.
 - **Open project in VS Code**: choose a folder or use the shared project folder.
 - **Open a website**, **Open a folder**, and **Open an application**.
 - **Custom command**: enter Windows and/or Linux commands, including commands to run inside VS Code.
 
-Project detection reads `.csproj`, `package.json` scripts, and `main.py`, `app.py`, or `manage.py`. It scans the chosen folder and two directory levels below it, excludes dependency/build folders, and prefers runnable projects. Choose from detected projects when a folder contains several. Detection does not install project dependencies or execute project files.
+Project detection reads `.csproj`, `package.json` scripts, JavaScript entry files (`.js`, `.mjs`, `.cjs`), and `main.py`, `app.py`, or `manage.py`. JavaScript projects with npm scripts offer those tasks; otherwise JavaScript files, including a package's `main` entry, can run directly with Node.js. Files named `*.config.js` (and equivalent module extensions) are skipped. Browser-only JavaScript needs an appropriate development-server task in `package.json` or a custom command. It scans the chosen folder and two directory levels below it, excludes dependency/build folders, and prefers runnable projects. Choose from detected projects when a folder contains several. Detection does not install project dependencies or execute project files.
 
 The source projects and VS Code integration identifier retain their original `LaunchForge` names for compatibility. The Windows desktop executable is `LazyLauncher.exe`.
 
@@ -34,7 +34,7 @@ The desktop interface uses Avalonia 11. On Linux it needs a graphical desktop an
 
 1. Use the VS Code example, or create a new workflow.
 2. Browse to the project folder. The example detects available projects automatically; **Detect project** can refresh the results.
-3. Add actions, choose their types, and fill in options. For **Run a project**, choose a project and task, then choose **Outside VS Code** or **VS Code terminal**.
+3. Add actions, choose their types, and fill in options. **Run a project** has its own visible folder picker. Leave it blank to follow the most recent preceding **Open project in VS Code** folder, falling back to the **Default project folder**. Browse to override it, or type a folder and click **Detect project**. Then choose a project, task, and **Outside VS Code** or **VS Code terminal**. New workflows start with no folder selected; the export destination is never used to detect a project.
 4. Use **Custom command** if you need another action. Windows uses cmd.exe and Linux uses Bash outside VS Code; inside VS Code, commands use its configured terminal shell.
 5. Save the workflow as JSON, and choose **Export launcher**.
 
