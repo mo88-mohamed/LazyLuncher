@@ -4,7 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 function parseRequest(uri) {
-  if (uri.authority !== 'launchforge.launcher' || uri.path !== '/run') throw new Error('Unsupported LaunchForge request.');
+  if (uri.authority !== 'launchforge.launcher' || uri.path !== '/run') throw new Error('Unsupported Lazy Launcher request.');
   const encoded = new URLSearchParams(uri.query).get('request');
   if (!encoded || encoded.length > 90000) throw new Error('Invalid launch request.');
   const request = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
@@ -33,7 +33,7 @@ function activate(context) {
     if (!vscode.workspace.isTrusted) {
       const pending = context.globalState.get('pendingLaunches', []);
       await context.globalState.update('pendingLaunches', [...pending, request].slice(-20));
-      await vscode.window.showInformationMessage('Trust this project in VS Code to run its LaunchForge task.');
+      await vscode.window.showInformationMessage('Trust this project in VS Code to run its Lazy Launcher task.');
       return;
     }
     // URI handlers accept external input. Approval is tied to the exact task and folder.
@@ -49,7 +49,7 @@ function activate(context) {
     const execution = request.command
       ? new vscode.ShellExecution(request.command, options)
       : new vscode.ShellExecution(request.executable, request.args, options);
-    const task = new vscode.Task({ type: 'launchforge', id: fingerprint }, workspace, request.name, 'LaunchForge', execution, []);
+    const task = new vscode.Task({ type: 'launchforge', id: fingerprint }, workspace, request.name, 'Lazy Launcher', execution, []);
     task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, panel: vscode.TaskPanelKind.Dedicated, focus: true, clear: false };
     await vscode.tasks.executeTask(task);
   }
@@ -61,7 +61,7 @@ function activate(context) {
     for (const request of matching) await run(request);
   }
   function enqueue(work) {
-    queue = queue.then(work).catch(error => vscode.window.showErrorMessage(`LaunchForge: ${error.message}`));
+    queue = queue.then(work).catch(error => vscode.window.showErrorMessage(`Lazy Launcher: ${error.message}`));
     return queue;
   }
   context.subscriptions.push(vscode.window.registerUriHandler({ handleUri: uri => enqueue(() => run(parseRequest(uri))) }));

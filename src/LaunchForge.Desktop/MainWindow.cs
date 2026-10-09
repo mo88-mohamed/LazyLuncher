@@ -35,7 +35,7 @@ public sealed class MainWindow : Window
 
     public MainWindow()
     {
-        Title = "LaunchForge";
+        Title = "Lazy Launcher";
         Width = 820; Height = 640; MinWidth = 640; MinHeight = 480;
         Background = Brush.Parse("#0B1220");
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -96,10 +96,10 @@ public sealed class MainWindow : Window
         brand.Children.Add(new Border
         {
             Width = 38, Height = 38, CornerRadius = new CornerRadius(10), Background = Brush.Parse("#153D40"),
-            Child = new TextBlock { Text = "LF", Foreground = Accent, FontWeight = FontWeight.Bold, FontSize = 15, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+            Child = new TextBlock { Text = "LL", Foreground = Accent, FontWeight = FontWeight.Bold, FontSize = 15, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
         });
         var title = new StackPanel { Spacing = 1 };
-        title.Children.Add(new TextBlock { Text = "LaunchForge", FontSize = 21, FontWeight = FontWeight.Bold });
+        title.Children.Add(new TextBlock { Text = "Lazy Launcher", FontSize = 21, FontWeight = FontWeight.Bold });
         title.Children.Add(Hint("Your tasks. One click."));
         brand.Children.Add(title);
         header.Children.Add(brand);
@@ -111,7 +111,13 @@ public sealed class MainWindow : Window
         _editor.Children.Add(header);
 
         var setup = new Grid { ColumnDefinitions = new ColumnDefinitions("2*,3*"), Margin = new Thickness(0, 0, 0, 14) };
-        var name = Field("Launcher name", workflow.Name, value => workflow.Name = value);
+        var name = new StackPanel { Spacing = 5 };
+        name.Children.Add(Label("Launcher name"));
+        var nameRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        nameRow.Children.Add(Input(workflow.Name, value => workflow.Name = value));
+        var icon = CreateIconButton(workflow);
+        icon.Margin = new Thickness(6, 0, 0, 0); Grid.SetColumn(icon, 1); nameRow.Children.Add(icon);
+        name.Children.Add(nameRow);
         name.Margin = new Thickness(0, 0, 12, 0); setup.Children.Add(name);
         var folderGroup = new StackPanel { Spacing = 5 };
         folderGroup.Children.Add(Label("Project folder"));
@@ -175,7 +181,7 @@ public sealed class MainWindow : Window
         Grid.SetRow(workspace, 2); _editor.Children.Add(workspace);
         RenderDetails();
 
-        var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"), Margin = new Thickness(0, 0, 0, 12) };
+        var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Margin = new Thickness(0, 0, 0, 12) };
         var formats = Enum.GetValues<ExportFormat>();
         var choice = new ComboBox { ItemsSource = new[] { "Windows batch (.bat)", "Linux script (.sh)", "Windows EXE (x64)", "Linux binary (x64)" }, SelectedIndex = Array.IndexOf(formats, _format), HorizontalAlignment = HorizontalAlignment.Stretch, MaxWidth = 290, FontSize = 12 };
         choice.HorizontalAlignment = HorizontalAlignment.Left;
@@ -183,6 +189,17 @@ public sealed class MainWindow : Window
         choice.SelectionChanged += (_, _) => { if (choice.SelectedIndex >= 0 && _format != formats[choice.SelectedIndex]) { _format = formats[choice.SelectedIndex]; Render(); } };
         ToolTip.SetTip(choice, "EXE and binary exports bundle the runtime and need the .NET SDK to build. Commands and project files must exist on the target computer.");
         footer.Children.Add(choice);
+        var run = AsyncButton("Run now", () => WithOperationAsync(token => WorkflowRunner.RunAsync(_workflow, Log, token)));
+        run.Margin = new Thickness(8, 0, 8, 0); Grid.SetColumn(run, 1); footer.Children.Add(run);
+        var export = AsyncButton("Export launcher", ExportAsync);
+        export.Background = Accent; export.Foreground = Brush.Parse("#082F2C"); export.FontWeight = FontWeight.SemiBold;
+        Grid.SetColumn(export, 2); footer.Children.Add(export);
+        Grid.SetRow(footer, 3);
+        _editor.Children.Add(footer);
+    }
+
+    private Button CreateIconButton(Workflow workflow)
+    {
         var icon = NewButton(string.IsNullOrWhiteSpace(workflow.IconPath) ? "Icon" : "Icon \u2713");
         icon.IsEnabled = _format is ExportFormat.WindowsBatch or ExportFormat.WindowsExecutable;
         if (!string.IsNullOrWhiteSpace(workflow.IconPath)) icon.Foreground = Accent;
@@ -195,14 +212,7 @@ public sealed class MainWindow : Window
         resetIcon.IsEnabled = !string.IsNullOrWhiteSpace(workflow.IconPath); iconMenu.Children.Add(resetIcon);
         iconMenu.Children.Add(Hint(_format == ExportFormat.WindowsBatch ? "Creates a shortcut beside the batch file with your icon." : "Embeds your icon directly into the exported EXE."));
         icon.Flyout = iconFlyout;
-        icon.Margin = new Thickness(8, 0, 0, 0); Grid.SetColumn(icon, 1); footer.Children.Add(icon);
-        var run = AsyncButton("Run now", () => WithOperationAsync(token => WorkflowRunner.RunAsync(_workflow, Log, token)));
-        run.Margin = new Thickness(8, 0, 8, 0); Grid.SetColumn(run, 2); footer.Children.Add(run);
-        var export = AsyncButton("Export launcher", ExportAsync);
-        export.Background = Accent; export.Foreground = Brush.Parse("#082F2C"); export.FontWeight = FontWeight.SemiBold;
-        Grid.SetColumn(export, 3); footer.Children.Add(export);
-        Grid.SetRow(footer, 3);
-        _editor.Children.Add(footer);
+        return icon;
     }
 
     private static string ActionTitle(int index, WorkflowStep step) => $"{index + 1:00}   {(string.IsNullOrWhiteSpace(step.Name) ? "Untitled action" : step.Name)}";
@@ -466,7 +476,7 @@ public sealed class MainWindow : Window
 
     private async Task OpenAsync()
     {
-        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Open workflow", AllowMultiple = false, FileTypeFilter = [new FilePickerFileType("LaunchForge workflow") { Patterns = ["*.json"] }] });
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Open workflow", AllowMultiple = false, FileTypeFilter = [new FilePickerFileType("Lazy Launcher workflow") { Patterns = ["*.json"] }] });
         if (files.Count == 0) return;
         await using var stream = await files[0].OpenReadAsync();
         using var reader = new StreamReader(stream);

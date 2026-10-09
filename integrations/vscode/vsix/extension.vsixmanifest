@@ -2,8 +2,8 @@
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
   <Metadata>
     <Identity Language="en-US" Id="launcher" Version="0.1.0" Publisher="launchforge" />
-    <DisplayName>LaunchForge Terminal Integration</DisplayName>
-    <Description xml:space="preserve">Run LaunchForge actions in VS Code terminals.</Description>
+    <DisplayName>Lazy Launcher Terminal Integration</DisplayName>
+    <Description xml:space="preserve">Run Lazy Launcher actions in VS Code terminals.</Description>
     <Tags>tasks,terminal,automation</Tags>
     <Categories>Other</Categories>
     <GalleryFlags>Public</GalleryFlags>

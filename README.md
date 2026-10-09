@@ -1,10 +1,12 @@
-# LaunchForge
+# Lazy Launcher
+
+Set it up once. Launch it with one click.
 
 A local .NET desktop app for Windows and Linux. Configure ordered commands and export a launcher to run them with one click.
 
 Choose actions and fill in simple options. Commands are optional: **Custom command** remains available for anything the built-in actions do not cover.
 
-![LaunchForge desktop](ui-preview.png)
+![Lazy Launcher desktop](ui-preview.png)
 
 ## Guided actions
 
@@ -14,6 +16,8 @@ Choose actions and fill in simple options. Commands are optional: **Custom comma
 - **Custom command**: enter Windows and/or Linux commands, including commands to run inside VS Code.
 
 Project detection reads `.csproj`, `package.json` scripts, and `main.py`, `app.py`, or `manage.py`. It scans the chosen folder and two directory levels below it, excludes dependency/build folders, and prefers runnable projects. Choose from detected projects when a folder contains several. Detection does not install project dependencies or execute project files.
+
+The source projects and VS Code integration identifier retain their original `LaunchForge` names for compatibility. The Windows desktop executable is `LazyLauncher.exe`.
 
 ## Run the desktop app
 
@@ -46,10 +50,10 @@ Generated EXEs/native binaries embed the integration package. Scripts with VS Co
 
 ## Custom launcher icons
 
-Choose **Icon** beside the export format, then select a Windows `.ico` file. Select **Use default icon** to reset it. The workflow remembers the icon's source path; that source is needed to export again.
+Choose **Icon** beside the launcher name, then select a Windows `.ico` file. Select **Use default icon** to reset it. The workflow remembers the icon's source path; that source is needed to export again.
 
 - **Windows EXE**: the icon is embedded into the executable; no companion icon file is needed.
-- **Windows batch**: Windows cannot assign a custom icon to an individual `.bat`. On Windows, LaunchForge also exports a `.lnk` shortcut and a `.launchforge.ico` copy. Use the shortcut to launch the batch with your icon.
+- **Windows batch**: Windows cannot assign a custom icon to an individual `.bat`. On Windows, Lazy Launcher also exports a `.lnk` shortcut and a `.launchforge.ico` copy. Use the shortcut to launch the batch with your icon.
 - **Linux**: custom icons are not included in Linux exports yet.
 
 Batch shortcuts reference the export location. Recreate/export them after moving to another folder or computer. Choose EXE for a single file with a portable embedded icon. Creating Windows shortcuts requires a Windows builder; EXE icon embedding supports cross-publishing.

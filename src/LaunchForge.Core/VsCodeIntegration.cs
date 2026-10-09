@@ -20,7 +20,7 @@ public static class VsCodeIntegration
         var installed = await RunCodeAsync("--list-extensions", token);
         if (installed.ExitCode != 0) throw new IOException("VS Code could not be found. Install VS Code and enable the 'code' command on PATH.\n" + installed.Output);
         if (installed.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Any(line => line.Trim().Equals(ExtensionId, StringComparison.OrdinalIgnoreCase))) return;
-        log?.Invoke("Setting up LaunchForge's VS Code terminal integration...");
+        log?.Invoke("Setting up Lazy Launcher's VS Code terminal integration...");
         var directory = Path.Combine(Path.GetTempPath(), "LaunchForge", "vscode", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
@@ -56,7 +56,7 @@ public static class VsCodeIntegration
         if ($LASTEXITCODE -ne 0) { throw 'Install VS Code and enable the code command on PATH.' }
         if ($installed -notcontains 'launchforge.launcher') {
             & code --install-extension (Join-Path $env:LAUNCHFORGE_LAUNCHER_DIR 'LaunchForge.VSCode.vsix')
-            if ($LASTEXITCODE -ne 0) { throw 'Could not install the LaunchForge VS Code integration.' }
+            if ($LASTEXITCODE -ne 0) { throw 'Could not install the Lazy Launcher VS Code integration.' }
         }
         """;
 

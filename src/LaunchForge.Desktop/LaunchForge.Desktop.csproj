@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>WinExe</OutputType></PropertyGroup>
+  <PropertyGroup><OutputType>WinExe</OutputType><AssemblyName>LazyLauncher</AssemblyName><Product>Lazy Launcher</Product><Title>Lazy Launcher</Title><Description>Create one-click launchers for your everyday actions.</Description></PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../LaunchForge.Core/LaunchForge.Core.csproj" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.12" />
