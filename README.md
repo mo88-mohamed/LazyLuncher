@@ -34,7 +34,7 @@ The desktop interface uses Avalonia 11. On Linux it needs a graphical desktop an
 
 1. Use the VS Code example, or create a new workflow.
 2. Choose a folder in your VS Code or Run project action. Browsing detects available projects automatically; **Detect project** can refresh the results.
-3. Add actions, choose their types, and fill in options. **Run a project** has its own visible folder picker. Leave it blank to follow the most recent preceding **Open project in VS Code** folder, falling back to the optional **Shared working folder** under **Workflow settings**. Browse to override it, or type a folder and click **Detect project**. Then choose a project, task, and **Outside VS Code** or **VS Code terminal**. New workflows start with no folder selected; the export destination is never used to detect a project.
+3. Add actions, choose their types, and fill in options. **Run a project** has its own visible folder picker. Leave it blank to follow the most recent preceding **Open project in VS Code** folder, falling back to the optional **Shared working folder** under **Workflow settings**. Browse to override it, or type a folder and click **Detect project**. Then choose a project, task, and **Outside an editor** or **VS Code terminal**. New workflows start with no folder selected; the export destination is never used to detect a project.
 4. Use **Custom command** if you need another action. Windows uses cmd.exe and Linux uses Bash outside VS Code; inside VS Code, commands use its configured terminal shell.
 5. **Save workflow** writes the name, icon, shared folder, and actions to JSON. Choose **Export launcher** to generate the launcher. Each opens a picker to choose where that file is saved.
 
@@ -47,6 +47,14 @@ The `code` command must be installed on PATH. Selecting **VS Code terminal** use
 VS Code must trust the workspace. The first launch asks you to approve the exact action; choose **Always allow this action** to remember it. Changing the command or folder requires a new approval. This version supports local desktop VS Code, not Insiders or remote/WSL workspaces.
 
 Generated EXEs/native binaries embed the integration package. Scripts with VS Code actions export a companion `LaunchForge.VSCode.vsix`; keep it beside the script when distributing it. It is only used to install the extension if needed. The desktop app does not need Node.js installed; extension development checks use Node.js 22.
+
+## Visual Studio integration (Windows)
+
+In **Run a project**, choose a .NET project, select **Run application**, then set **Run in** to **Visual Studio (Windows)**. Lazy Launcher uses `devenv.exe /Run` to open and start the selected `.csproj`. You can instead browse to a `.sln` under **Solution or project**; Visual Studio uses that solution's configured startup project. Project workloads and dependencies must already be installed.
+
+Visual Studio is discovered through PATH or the installed Visual Studio Installer's `vswhere.exe`. If automatic discovery fails, choose `devenv.exe` under **Advanced options**. This works with **Run now**, Windows batch exports, and Windows EXE exports. Linux exports and non-.NET actions are rejected. Build, watch and test tasks remain available with the other run locations.
+
+The launcher hands off to Visual Studio and continues; it does not wait for compilation, debugger startup or the launched application's exit. It does not install Visual Studio or package your project. See Microsoft's [devenv /Run documentation](https://learn.microsoft.com/en-us/visualstudio/ide/reference/run-devenv-exe?view=visualstudio).
 
 ## Custom launcher icons
 

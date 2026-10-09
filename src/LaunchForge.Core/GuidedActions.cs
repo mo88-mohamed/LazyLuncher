@@ -12,6 +12,11 @@ public static class GuidedActions
     public static string CommandFor(WorkflowStep step, bool windows, string defaultFolder)
     {
         var folder = string.IsNullOrWhiteSpace(step.WorkingDirectory) ? defaultFolder : step.WorkingDirectory;
+        if (step.RunIn == RunLocation.VisualStudio)
+        {
+            if (!windows) throw new InvalidDataException("Visual Studio actions require a Windows export.");
+            if (step.Kind != ActionKind.RunProject) throw new InvalidDataException("Visual Studio is available only for Run a project actions.");
+        }
         if (step.Kind == ActionKind.CustomCommand && !step.UsesVsCodeIntegration) return windows ? step.WindowsCommand : step.LinuxCommand;
         if (step.Kind == ActionKind.OpenVsCode) return Tool("code", [string.IsNullOrWhiteSpace(step.Target) ? "." : step.Target], windows);
         if (step.Kind is ActionKind.OpenWebsite or ActionKind.OpenFolder)
@@ -48,6 +53,12 @@ public static class GuidedActions
                 if (string.IsNullOrWhiteSpace(task)) task = detected[0].Tasks.FirstOrDefault()?.Value ?? "";
             }
             projectFile = windows ? projectFile.Replace('/', '\\') : projectFile.Replace('\\', '/');
+            if (step.RunIn == RunLocation.VisualStudio)
+            {
+                if (kind != ProjectKind.DotNet) throw new InvalidDataException("Choose a .NET project to run in Visual Studio.");
+                if (!string.IsNullOrWhiteSpace(task) && task != "run") throw new InvalidDataException("Visual Studio supports Run application. Choose another run location for build, watch or test tasks.");
+                return VisualStudioCommand(step, projectFile);
+            }
             if (kind == ProjectKind.DotNet)
             {
                 task = string.IsNullOrWhiteSpace(task) ? "run" : task;
@@ -95,6 +106,22 @@ public static class GuidedActions
             return Tool("code", ["--open-url", url], windows);
         }
         return Tool(executable, arguments, windows);
+    }
+
+    private static string VisualStudioCommand(WorkflowStep step, string projectFile)
+    {
+        var file = string.IsNullOrWhiteSpace(step.VisualStudioFile) ? projectFile : step.VisualStudioFile;
+        if (string.IsNullOrWhiteSpace(file) || !(file.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidDataException("Choose a .csproj project or .sln solution for Visual Studio.");
+        if (file.IndexOfAny(['\"', '\r', '\n', '\0']) >= 0 || step.VisualStudioPath.IndexOfAny(['\"', '\r', '\n', '\0']) >= 0)
+            throw new InvalidDataException("Enter valid Visual Studio file paths.");
+        var script = "$project = [IO.Path]::GetFullPath(" + PowerShellQuote(file.Replace('/', '\\')) + "); if (-not (Test-Path -LiteralPath $project -PathType Leaf)) { throw 'Visual Studio project or solution does not exist.' }; "
+            + "$ide = " + PowerShellQuote(step.VisualStudioPath) + "; "
+            + "if (-not $ide) { $cmd = Get-Command devenv.exe -ErrorAction SilentlyContinue; if ($cmd) { $ide = $cmd.Source } }; "
+            + "if (-not $ide) { $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\\Installer\\vswhere.exe'; if (Test-Path -LiteralPath $vswhere) { $ide = & $vswhere -latest -products Microsoft.VisualStudio.Product.Community Microsoft.VisualStudio.Product.Professional Microsoft.VisualStudio.Product.Enterprise -property productPath | Select-Object -First 1 } }; "
+            + "if (-not $ide -or -not (Test-Path -LiteralPath $ide -PathType Leaf)) { throw 'Visual Studio was not found. Install Visual Studio or choose devenv.exe in the action settings.' }; "
+            + "Start-Process -FilePath $ide -ArgumentList @('/Run', ('\"' + $project + '\"'))";
+        return WindowsScript(script);
     }
 
     private static string Tool(string executable, string[] arguments, bool windows) => windows

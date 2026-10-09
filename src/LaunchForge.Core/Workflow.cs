@@ -28,6 +28,7 @@ public sealed class Workflow
                 if (step is null) continue;
                 step.Name ??= "Action"; step.WorkingDirectory ??= ""; step.WindowsCommand ??= ""; step.LinuxCommand ??= "";
                 step.Target ??= ""; step.ProjectFile ??= ""; step.ProjectTask ??= "";
+                step.VisualStudioFile ??= ""; step.VisualStudioPath ??= "";
             }
         return workflow;
     }
@@ -89,6 +90,8 @@ public sealed class WorkflowStep
     public string ProjectFile { get; set; } = "";
     public string ProjectTask { get; set; } = "";
     public RunLocation RunIn { get; set; }
+    public string VisualStudioFile { get; set; } = "";
+    public string VisualStudioPath { get; set; } = "";
     [JsonIgnore] public bool UsesVsCodeIntegration => RunIn == RunLocation.VsCode && Kind is ActionKind.RunProject or ActionKind.CustomCommand;
     public string ExecutionFolder(string defaultFolder) => !string.IsNullOrWhiteSpace(WorkingDirectory) ? WorkingDirectory
         : Kind is ActionKind.OpenWebsite or ActionKind.OpenApplication || (Kind is ActionKind.OpenVsCode or ActionKind.OpenFolder && !string.IsNullOrWhiteSpace(Target)) ? "." : defaultFolder;
@@ -97,4 +100,4 @@ public sealed class WorkflowStep
 
 public enum ActionKind { CustomCommand, OpenVsCode, RunProject, OpenWebsite, OpenFolder, OpenApplication }
 public enum ProjectKind { Auto, DotNet, Node, Python, JavaScript }
-public enum RunLocation { External, VsCode }
+public enum RunLocation { External, VsCode, VisualStudio }

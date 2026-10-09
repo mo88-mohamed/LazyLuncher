@@ -315,6 +315,7 @@ public sealed class MainWindow : Window
             if (kind.SelectedIndex < 0 || step.Kind == ActionTypes[kind.SelectedIndex].Kind) return;
             var oldLabel = ActionTypes.First(item => item.Kind == step.Kind).Label;
             step.Kind = ActionTypes[kind.SelectedIndex].Kind;
+            if (step.Kind != ActionKind.RunProject && step.RunIn == RunLocation.VisualStudio) step.RunIn = RunLocation.External;
             if (step.Name is "Run project" or "Action" || step.Name == oldLabel) { step.Name = ActionTypes[kind.SelectedIndex].Label; _actionLabels[position].Text = ActionTitle(position, step); }
             RenderDetails();
         };
@@ -351,8 +352,9 @@ public sealed class MainWindow : Window
         }
         if (step.Kind is ActionKind.RunProject or ActionKind.CustomCommand)
         {
-            var location = new ComboBox { ItemsSource = new[] { "Outside VS Code", "VS Code terminal" }, SelectedIndex = (int)step.RunIn, HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12 };
-            location.SelectionChanged += (_, _) => { if (location.SelectedIndex >= 0 && (int)step.RunIn != location.SelectedIndex) { step.RunIn = (RunLocation)location.SelectedIndex; RenderDetails(); } };
+            var locations = step.Kind == ActionKind.RunProject ? new[] { "Outside an editor", "VS Code terminal", "Visual Studio (Windows)" } : new[] { "Outside an editor", "VS Code terminal" };
+            var location = new ComboBox { ItemsSource = locations, SelectedIndex = (int)step.RunIn, HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12 };
+            location.SelectionChanged += (_, _) => { if (location.SelectedIndex >= 0 && (int)step.RunIn != location.SelectedIndex) { step.RunIn = (RunLocation)location.SelectedIndex; if (step.RunIn == RunLocation.VisualStudio) step.ProjectTask = "run"; RenderDetails(); } };
             var locationField = Labeled("Run in", location);
             if (taskChoice is null) _details.Children.Add(locationField);
             else
@@ -362,7 +364,18 @@ public sealed class MainWindow : Window
                 Grid.SetColumn(locationField, 1); taskRow.Children.Add(locationField); _details.Children.Add(taskRow);
             }
         }
-        if (step.UsesVsCodeIntegration)
+        if (step.RunIn == RunLocation.VisualStudio)
+        {
+            _details.Children.Add(Hint("Windows only. Opens Visual Studio and starts the project. Later actions do not wait for the application to finish. Solutions use their configured startup project."));
+            _details.Children.Add(Field("Solution or project (optional)", step.VisualStudioFile, value => step.VisualStudioFile = value, "Leave blank to use the selected .csproj"));
+            _details.Children.Add(AsyncButton("Browse solution or project", async () =>
+            {
+                var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Visual Studio solution or project", AllowMultiple = false, FileTypeFilter = [new FilePickerFileType("Visual Studio") { Patterns = ["*.sln", "*.csproj"] }] });
+                if (files.Count > 0 && files[0].TryGetLocalPath() is { } path) step.VisualStudioFile = path;
+                RenderDetails();
+            }));
+        }
+        else if (step.UsesVsCodeIntegration)
             _details.Children.Add(Hint("First use sets up the VS Code integration and asks you to approve the task. Later actions do not wait for this task to finish."));
         else
         {
@@ -373,6 +386,16 @@ public sealed class MainWindow : Window
         }
         var advanced = new StackPanel { Spacing = 10, Margin = new Thickness(0, 8, 0, 0) };
         advanced.Children.Add(Field("Action name", step.Name, value => { step.Name = value; actionLabel.Text = ActionTitle(position, step); }));
+        if (step.RunIn == RunLocation.VisualStudio)
+        {
+            advanced.Children.Add(Field("Visual Studio executable (optional)", step.VisualStudioPath, value => step.VisualStudioPath = value, "Auto-detect installed Visual Studio"));
+            advanced.Children.Add(AsyncButton("Browse devenv.exe", async () =>
+            {
+                var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Choose Visual Studio devenv.exe", AllowMultiple = false, FileTypeFilter = [new FilePickerFileType("Visual Studio executable") { Patterns = ["devenv.exe"] }] });
+                if (files.Count > 0 && files[0].TryGetLocalPath() is { } path) step.VisualStudioPath = path;
+                RenderDetails();
+            }));
+        }
         if (step.Kind != ActionKind.RunProject) advanced.Children.Add(Field("Working folder", step.WorkingDirectory, value => step.WorkingDirectory = value, "Leave blank to use the shared folder in Workflow settings"));
         _details.Children.Add(new Expander { Header = "Advanced options", Content = advanced, IsExpanded = !string.IsNullOrWhiteSpace(step.WorkingDirectory), HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12, Background = Surface, BorderBrush = Outline, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(7) });
     }
@@ -456,7 +479,8 @@ public sealed class MainWindow : Window
 
     private static Control TaskChoice(WorkflowStep step, IReadOnlyList<ProjectTask> tasks)
     {
-        if (tasks.Count == 0) return Hint("No runnable tasks found. Use Custom command to define one.");
+        if (step.RunIn == RunLocation.VisualStudio) tasks = tasks.Where(task => task.Value == "run").ToArray();
+        if (tasks.Count == 0) return Hint(step.RunIn == RunLocation.VisualStudio ? "Choose a runnable .NET project, or browse to a solution with a startup project." : "No runnable tasks found. Use Custom command to define one.");
         int index = tasks.ToList().FindIndex(task => task.Value == step.ProjectTask);
         if (index < 0) { index = 0; step.ProjectTask = tasks[0].Value; }
         var choice = new ComboBox { ItemsSource = tasks.Select(task => task.Label).ToArray(), SelectedIndex = index, HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12 };

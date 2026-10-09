@@ -16,6 +16,11 @@ Workflow Make(params WorkflowStep[] steps) => new() { Name = "Test", WorkingDire
 WorkflowStep Command(string windows, string linux) => new() { Name = "Check", WindowsCommand = windows, LinuxCommand = linux };
 try
 {
+    if (args.FirstOrDefault() == "/Run")
+    {
+        await File.WriteAllTextAsync(Environment.GetEnvironmentVariable("LAUNCHFORGE_VS_TEST_LOG")!, args[1]);
+        return 0;
+    }
     var workflow = Make(Command("echo first>first.txt", "printf first > first.txt"), Command("if not exist first.txt exit /b 9", "test -f first.txt"));
     Check(Workflow.FromJson(workflow.ToJson()).Steps.Count == 2, "Workflow JSON round trip");
     Check(await WorkflowRunner.RunAsync(workflow) == 0 && File.Exists(Path.Combine(scratch, "first.txt")), "Ordered commands and working directory");
@@ -68,6 +73,42 @@ try
     var detected = ProjectDetector.Detect(projectRoot);
     Check(detected.Count == 3 && detected.Any(project => project.Kind == ProjectKind.DotNet) && detected.Any(project => project.Kind == ProjectKind.Python), "Detects .NET, Node and Python while excluding dependencies");
     Check(detected.Single(project => project.Kind == ProjectKind.Node).Tasks[0].Value == "dev", "Node task detection prefers the development server");
+    var visualStudioStep = new WorkflowStep { Kind = ActionKind.RunProject, ProjectKind = ProjectKind.DotNet, ProjectFile = "App.csproj", ProjectTask = "run", WorkingDirectory = projectRoot, RunIn = RunLocation.VisualStudio };
+    var visualStudioWorkflow = Make(visualStudioStep);
+    var visualStudioScript = visualStudioStep.CommandFor(true, projectRoot);
+    var decodedVisualStudioScript = System.Text.Encoding.Unicode.GetString(Convert.FromBase64String(visualStudioScript[(visualStudioScript.LastIndexOf(' ') + 1)..]));
+    Check(decodedVisualStudioScript.Contains("vswhere") && decodedVisualStudioScript.Contains("'/Run'") && decodedVisualStudioScript.Contains("App.csproj"), "Visual Studio auto-discovery and Run arguments are generated");
+    try { visualStudioWorkflow.Validate(false); Check(false, "Visual Studio rejects Linux exports"); } catch (InvalidDataException) { Check(true, "Visual Studio rejects Linux exports"); }
+    visualStudioStep.ProjectKind = ProjectKind.Node;
+    try { visualStudioWorkflow.Validate(true); Check(false, "Visual Studio rejects non-.NET projects"); } catch (InvalidDataException) { Check(true, "Visual Studio rejects non-.NET projects"); }
+    visualStudioStep.ProjectKind = ProjectKind.DotNet; visualStudioStep.ProjectTask = "watch";
+    try { visualStudioWorkflow.Validate(true); Check(false, "Visual Studio rejects unsupported tasks"); } catch (InvalidDataException) { Check(true, "Visual Studio rejects unsupported tasks"); }
+    visualStudioStep.ProjectTask = "run"; visualStudioStep.VisualStudioFile = "App.sln";
+    await File.WriteAllTextAsync(Path.Combine(projectRoot, "App.sln"), "test solution");
+    Check(Workflow.FromJson(visualStudioWorkflow.ToJson()).Steps[0].VisualStudioFile == "App.sln", "Visual Studio selection and solution survive workflow save/load");
+    if (OperatingSystem.IsWindows())
+    {
+        var vsLog = Path.Combine(scratch, "visual-studio-args.txt");
+        visualStudioStep.VisualStudioPath = Path.Combine(AppContext.BaseDirectory, "LaunchForge.Checks.exe");
+        Environment.SetEnvironmentVariable("LAUNCHFORGE_VS_TEST_LOG", vsLog);
+        async Task<bool> WaitForVisualStudioStub()
+        {
+            for (var attempt = 0; attempt < 100; attempt++)
+            {
+                if (File.Exists(vsLog) && await File.ReadAllTextAsync(vsLog) == Path.Combine(projectRoot, "App.sln")) return true;
+                await Task.Delay(100);
+            }
+            return false;
+        }
+        try
+        {
+            Check(await WorkflowRunner.RunAsync(visualStudioWorkflow) == 0 && await WaitForVisualStudioStub(), "Visual Studio handoff preserves the solution path including special characters");
+            File.Delete(vsLog);
+            await LauncherExporter.ExportAsync(visualStudioWorkflow, ExportFormat.WindowsBatch, launcher);
+            Check(await Execute(launcher) == 0 && await WaitForVisualStudioStub(), "Exported batch launches Visual Studio with the selected solution");
+        }
+        finally { Environment.SetEnvironmentVariable("LAUNCHFORGE_VS_TEST_LOG", null); }
+    }
     var javascriptRoot = Path.Combine(scratch, "javascript"); Directory.CreateDirectory(javascriptRoot);
     foreach (var file in new[] { "index.js", "server.mjs", "app.cjs", "vite.config.js" }) await File.WriteAllTextAsync(Path.Combine(javascriptRoot, file), "console.log('example')");
     await File.WriteAllTextAsync(Path.Combine(javascriptRoot, "package.json"), "{\"main\":\"index.js\"}");
