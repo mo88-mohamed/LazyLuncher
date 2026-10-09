@@ -33,12 +33,12 @@ On Windows you can also double-click `start-windows.bat`. On Linux use `bash sta
 The desktop interface uses Avalonia 11. On Linux it needs a graphical desktop and Avalonia's native desktop dependencies: https://docs.avaloniaui.net/docs/platform-specific-guides/linux/
 
 1. Use the VS Code example, or create a new workflow.
-2. Browse to the project folder. The example detects available projects automatically; **Detect project** can refresh the results.
-3. Add actions, choose their types, and fill in options. **Run a project** has its own visible folder picker. Leave it blank to follow the most recent preceding **Open project in VS Code** folder, falling back to the **Default project folder**. Browse to override it, or type a folder and click **Detect project**. Then choose a project, task, and **Outside VS Code** or **VS Code terminal**. New workflows start with no folder selected; the export destination is never used to detect a project.
+2. Choose a folder in your VS Code or Run project action. Browsing detects available projects automatically; **Detect project** can refresh the results.
+3. Add actions, choose their types, and fill in options. **Run a project** has its own visible folder picker. Leave it blank to follow the most recent preceding **Open project in VS Code** folder, falling back to the optional **Shared working folder** under **Workflow settings**. Browse to override it, or type a folder and click **Detect project**. Then choose a project, task, and **Outside VS Code** or **VS Code terminal**. New workflows start with no folder selected; the export destination is never used to detect a project.
 4. Use **Custom command** if you need another action. Windows uses cmd.exe and Linux uses Bash outside VS Code; inside VS Code, commands use its configured terminal shell.
-5. Save the workflow as JSON, and choose **Export launcher**.
+5. **Save workflow** writes the name, icon, shared folder, and actions to JSON. Choose **Export launcher** to generate the launcher. Each opens a picker to choose where that file is saved.
 
-Action names and individual working folders are under **Advanced options**. For actions outside VS Code, **Wait before starting the next action** runs them sequentially and stops on a nonzero exit code; disable it to launch independently. VS Code tasks run independently after handoff. Later actions do not wait for task completion, approval, or server readiness. There is no readiness/port-wait action yet.
+**Workflow settings** contains an optional shared working folder, used only as a fallback for actions without their own folder. It is saved inside the workflow; it does not set the save or export destination. You can leave it empty when your actions already specify their folders. Action names and other individual working folders are under **Advanced options**. For actions outside VS Code, **Wait before starting the next action** runs them sequentially and stops on a nonzero exit code; disable it to launch independently. VS Code tasks run independently after handoff. Later actions do not wait for task completion, approval, or server readiness. There is no readiness/port-wait action yet.
 
 ## VS Code terminal integration
 

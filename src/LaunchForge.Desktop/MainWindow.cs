@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
@@ -15,8 +16,8 @@ public sealed class MainWindow : Window
     private static readonly IBrush Outline = Brush.Parse("#29374E");
     private static readonly IBrush Muted = Brush.Parse("#A6B4CA");
     private static readonly IBrush Accent = Brush.Parse("#5EEAD4");
-    private readonly Grid _editor = new() { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"), Margin = new Thickness(18, 16, 18, 0) };
-    private readonly StackPanel _details = new() { Spacing = 12 };
+    private readonly Grid _editor = new() { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"), Margin = new Thickness(18, 10, 18, 0) };
+    private readonly StackPanel _details = new() { Spacing = 10 };
     private ScrollViewer? _detailScroll;
     private readonly List<TextBlock> _actionLabels = [];
     private readonly TextBox _status = new() { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 36, MaxHeight = 72, Background = Brushes.Transparent, BorderThickness = new Thickness(0), FontSize = 12, Foreground = Muted, Text = "Ready. Choose a project folder and configure your actions." };
@@ -38,8 +39,13 @@ public sealed class MainWindow : Window
         Title = "Lazy Launcher";
         Width = 820; Height = 640; MinWidth = 640; MinHeight = 480;
         Background = Brush.Parse("#0B1220");
+        ExtendClientAreaToDecorationsHint = true;
+        ExtendClientAreaChromeHints = Avalonia.Platform.ExtendClientAreaChromeHints.NoChrome;
+        ExtendClientAreaTitleBarHeightHint = 0;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         var root = new DockPanel();
+        var titleBar = CreateTitleBar();
+        DockPanel.SetDock(titleBar, Dock.Top); root.Children.Add(titleBar);
         var statusRow = new DockPanel { Margin = new Thickness(18, 4, 18, 8) };
         DockPanel.SetDock(_cancel, Dock.Right);
         statusRow.Children.Add(_cancel); statusRow.Children.Add(_status);
@@ -55,6 +61,44 @@ public sealed class MainWindow : Window
             if (_operation is not null) { args.Cancel = true; _operation.Cancel(); Log("Cancelling. Close the window again when the operation finishes."); }
         };
         Render();
+    }
+
+    private Control CreateTitleBar()
+    {
+        var bar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Height = 32, Background = Brush.Parse("#0B1220") };
+        var dragArea = new Border { Background = Brushes.Transparent, Child = new TextBlock { Text = "Lazy Launcher", FontSize = 11, Foreground = Muted, Margin = new Thickness(18, 0), VerticalAlignment = VerticalAlignment.Center } };
+        void ToggleMaximize() => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+        dragArea.PointerPressed += (_, args) =>
+        {
+            if (!args.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+            if (args.ClickCount == 2) ToggleMaximize();
+            else BeginMoveDrag(args);
+            args.Handled = true;
+        };
+        bar.Children.Add(dragArea);
+        var controls = new StackPanel { Orientation = Orientation.Horizontal };
+        Button Caption(string symbol, string label, Action action)
+        {
+            var button = new Button { Content = symbol, Width = 44, Height = 32, Padding = new Thickness(0), Background = Brushes.Transparent, BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(0), Foreground = Muted, FontSize = 16, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+            ToolTip.SetTip(button, label);
+            Avalonia.Automation.AutomationProperties.SetName(button, label);
+            button.Click += (_, _) => action();
+            controls.Children.Add(button); return button;
+        }
+        Caption("\u2212", "Minimize", () => WindowState = WindowState.Minimized);
+        var maximize = Caption("\u25a1", "Maximize", ToggleMaximize);
+        PropertyChanged += (_, args) =>
+        {
+            if (args.Property != WindowStateProperty) return;
+            var label = WindowState == WindowState.Maximized ? "Restore" : "Maximize";
+            maximize.Content = WindowState == WindowState.Maximized ? "\u2750" : "\u25a1";
+            ToolTip.SetTip(maximize, label); Avalonia.Automation.AutomationProperties.SetName(maximize, label);
+        };
+        var close = Caption("\u00d7", "Close", Close);
+        close.PointerEntered += (_, _) => { close.Background = Brush.Parse("#B42335"); close.Foreground = Brushes.White; };
+        close.PointerExited += (_, _) => { close.Background = Brushes.Transparent; close.Foreground = Muted; };
+        Grid.SetColumn(controls, 1); bar.Children.Add(controls);
+        return bar;
     }
 
     private void FitToScreen()
@@ -91,7 +135,7 @@ public sealed class MainWindow : Window
         var workflow = _workflow;
         _selectedAction = Math.Clamp(_selectedAction, 0, Math.Max(0, _workflow.Steps.Count - 1));
 
-        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 0, 0, 16) };
+        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 0, 0, 12) };
         var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
         brand.Children.Add(new Border
         {
@@ -106,11 +150,13 @@ public sealed class MainWindow : Window
         var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
         toolbar.Children.Add(ActionButton("New", () => { _workflow = new Workflow(); _selectedAction = 0; Render(); }));
         toolbar.Children.Add(AsyncButton("Open", OpenAsync));
-        toolbar.Children.Add(AsyncButton("Save", SaveAsync));
+        var save = AsyncButton("Save workflow", SaveAsync);
+        ToolTip.SetTip(save, "Save the launcher name, settings, icon and actions as a workflow JSON file.");
+        toolbar.Children.Add(save);
         Grid.SetColumn(toolbar, 1); header.Children.Add(toolbar);
         _editor.Children.Add(header);
 
-        var setup = new Grid { ColumnDefinitions = new ColumnDefinitions("2*,3*"), Margin = new Thickness(0, 0, 0, 14) };
+        var setup = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 0, 0, 14) };
         var name = new StackPanel { Spacing = 5 };
         name.Children.Add(Label("Launcher name"));
         var nameRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
@@ -119,11 +165,13 @@ public sealed class MainWindow : Window
         icon.Margin = new Thickness(6, 0, 0, 0); Grid.SetColumn(icon, 1); nameRow.Children.Add(icon);
         name.Children.Add(nameRow);
         name.Margin = new Thickness(0, 0, 12, 0); setup.Children.Add(name);
-        var folderGroup = new StackPanel { Spacing = 5 };
-        folderGroup.Children.Add(Label("Default project folder"));
+        var folderGroup = new StackPanel { Spacing = 8, Width = 380, MaxWidth = 380 };
+        folderGroup.Children.Add(new TextBlock { Text = "Workflow settings", FontSize = 16, FontWeight = FontWeight.SemiBold });
+        folderGroup.Children.Add(Label("Shared working folder (optional)"));
+        folderGroup.Children.Add(Hint("Fallback folder for actions without their own folder. Run project first uses the preceding VS Code action's folder."));
         var folderRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-        var folderInput = Input(workflow.WorkingDirectory, value => { workflow.WorkingDirectory = value; ResetInheritedProjects(); });
-        ToolTip.SetTip(folderInput, "Full folder path on the computer that will run the launcher.");
+        var folderInput = Input(workflow.WorkingDirectory, value => { workflow.WorkingDirectory = value; ResetInheritedProjects(); }, "Choose a shared folder, or leave empty");
+        ToolTip.SetTip(folderInput, "Full folder path on the computer that will run the launcher. Saved inside the workflow.");
         folderRow.Children.Add(folderInput);
         var browse = AsyncButton("Browse", async () =>
         {
@@ -137,7 +185,13 @@ public sealed class MainWindow : Window
             }
         });
         browse.Margin = new Thickness(6, 0, 0, 0); Grid.SetColumn(browse, 1); folderRow.Children.Add(browse);
-        folderGroup.Children.Add(folderRow); Grid.SetColumn(folderGroup, 1); setup.Children.Add(folderGroup);
+        folderGroup.Children.Add(folderRow);
+        folderGroup.Children.Add(Hint("Save workflow remembers this setting. You choose where to save the workflow or generated launcher separately."));
+        var settings = NewButton("Workflow settings");
+        settings.VerticalAlignment = VerticalAlignment.Bottom;
+        settings.Flyout = new Flyout { Content = folderGroup };
+        ToolTip.SetTip(settings, "Optional shared working folder. Each action can choose its own folder.");
+        Grid.SetColumn(settings, 1); setup.Children.Add(settings);
         Grid.SetRow(setup, 1); _editor.Children.Add(setup);
 
         var workspace = new Grid { ColumnDefinitions = new ColumnDefinitions("190,*"), Margin = new Thickness(0, 0, 0, 12) };
@@ -273,7 +327,7 @@ public sealed class MainWindow : Window
         else
         {
             bool application = step.Kind == ActionKind.OpenApplication;
-            _details.Children.Add(Field(application ? "Application" : "Folder", step.Target, value => { step.Target = value; if (step.Kind == ActionKind.OpenVsCode) ResetInheritedProjects(); }, application ? "Select an application or enter its name" : "Leave blank to use the default project folder"));
+            _details.Children.Add(Field(application ? "Application" : "Folder", step.Target, value => { step.Target = value; if (step.Kind == ActionKind.OpenVsCode) ResetInheritedProjects(); }, application ? "Select an application or enter its name" : "Leave blank to use the shared folder in Workflow settings"));
             _details.Children.Add(AsyncButton(application ? "Browse application..." : "Browse folder...", async () =>
             {
                 if (application)
@@ -319,7 +373,7 @@ public sealed class MainWindow : Window
         }
         var advanced = new StackPanel { Spacing = 10, Margin = new Thickness(0, 8, 0, 0) };
         advanced.Children.Add(Field("Action name", step.Name, value => { step.Name = value; actionLabel.Text = ActionTitle(position, step); }));
-        if (step.Kind != ActionKind.RunProject) advanced.Children.Add(Field("Working folder", step.WorkingDirectory, value => step.WorkingDirectory = value, "Leave blank to use the default project folder"));
+        if (step.Kind != ActionKind.RunProject) advanced.Children.Add(Field("Working folder", step.WorkingDirectory, value => step.WorkingDirectory = value, "Leave blank to use the shared folder in Workflow settings"));
         _details.Children.Add(new Expander { Header = "Advanced options", Content = advanced, IsExpanded = !string.IsNullOrWhiteSpace(step.WorkingDirectory), HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12, Background = Surface, BorderBrush = Outline, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(7) });
     }
 
@@ -364,7 +418,7 @@ public sealed class MainWindow : Window
         browse.Margin = new Thickness(6, 0, 0, 0); Grid.SetColumn(browse, 1); folderRow.Children.Add(browse);
         _details.Children.Add(Labeled("Project folder for this action", folderRow));
         _details.Children.Add(Hint(string.IsNullOrWhiteSpace(step.WorkingDirectory)
-            ? "Uses the preceding Open project in VS Code folder, then the default folder. Browse to choose another."
+            ? "Uses the preceding VS Code folder, then Workflow settings. Browse to override."
             : "Uses this action's folder. Clear it to follow the preceding VS Code action."));
         if (_projects.TryGetValue(folder, out var detected) && detected.Count > 0)
         {
@@ -526,7 +580,7 @@ public sealed class MainWindow : Window
         await using var stream = await file.OpenWriteAsync();
         stream.SetLength(0);
         await using var writer = new StreamWriter(stream);
-        await writer.WriteAsync(_workflow.ToJson()); Log("Workflow saved.");
+        await writer.WriteAsync(_workflow.ToJson()); Log($"Workflow saved with its settings and actions: {file.Name}");
     }
 
     private string SafeName() => string.Concat(_workflow.Name.Select(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' ? character : '-')).Trim('-') is { Length: > 0 } name ? name : "launcher";
