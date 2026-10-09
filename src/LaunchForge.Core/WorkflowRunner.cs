@@ -22,7 +22,7 @@ public static class WorkflowRunner
             }
             var info = new ProcessStartInfo
             {
-                FileName = windows ? "cmd.exe" : "/bin/bash",
+                FileName = TrustedTools.CommandShell,
                 WorkingDirectory = folder,
                 UseShellExecute = false
             };

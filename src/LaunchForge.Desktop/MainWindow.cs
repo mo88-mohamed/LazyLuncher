@@ -12,6 +12,8 @@ namespace LaunchForge.Desktop;
 public sealed class MainWindow : Window
 {
     private Workflow _workflow = Example();
+    private bool _importedWorkflow;
+    private string? _approvedImport;
     private static readonly IBrush Surface = Brush.Parse("#111C2E");
     private static readonly IBrush Outline = Brush.Parse("#29374E");
     private static readonly IBrush Muted = Brush.Parse("#A6B4CA");
@@ -148,7 +150,7 @@ public sealed class MainWindow : Window
         brand.Children.Add(title);
         header.Children.Add(brand);
         var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
-        toolbar.Children.Add(ActionButton("New", () => { _workflow = new Workflow(); _selectedAction = 0; Render(); }));
+        toolbar.Children.Add(ActionButton("New", () => { _workflow = new Workflow(); _importedWorkflow = false; _approvedImport = null; _selectedAction = 0; Render(); }));
         toolbar.Children.Add(AsyncButton("Open", OpenAsync));
         var save = AsyncButton("Save workflow", SaveAsync);
         ToolTip.SetTip(save, "Save the launcher name, settings, icon and actions as a workflow JSON file.");
@@ -203,7 +205,7 @@ public sealed class MainWindow : Window
         var sidebarFooter = new StackPanel { Spacing = 6, Margin = new Thickness(0, 8, 0, 0) };
         var add = ActionButton("+ Add action", AddAction); add.HorizontalAlignment = HorizontalAlignment.Stretch;
         sidebarFooter.Children.Add(add);
-        var example = ActionButton("Use VS Code example", () => { _workflow = Example(); _selectedAction = 0; Render(); });
+        var example = ActionButton("Use VS Code example", () => { _workflow = Example(); _importedWorkflow = false; _approvedImport = null; _selectedAction = 0; Render(); });
         example.HorizontalAlignment = HorizontalAlignment.Stretch; example.FontSize = 11;
         sidebarFooter.Children.Add(example);
         DockPanel.SetDock(sidebarFooter, Dock.Bottom); sidebar.Children.Add(sidebarFooter);
@@ -243,7 +245,7 @@ public sealed class MainWindow : Window
         choice.SelectionChanged += (_, _) => { if (choice.SelectedIndex >= 0 && _format != formats[choice.SelectedIndex]) { _format = formats[choice.SelectedIndex]; Render(); } };
         ToolTip.SetTip(choice, "EXE and binary exports bundle the runtime and need the .NET SDK to build. Commands and project files must exist on the target computer.");
         footer.Children.Add(choice);
-        var run = AsyncButton("Run now", () => WithOperationAsync(token => WorkflowRunner.RunAsync(_workflow, Log, token)));
+        var run = AsyncButton("Run now", RunWorkflowAsync);
         run.Margin = new Thickness(8, 0, 8, 0); Grid.SetColumn(run, 1); footer.Children.Add(run);
         var export = AsyncButton("Export launcher", ExportAsync);
         export.Background = Accent; export.Foreground = Brush.Parse("#082F2C"); export.FontWeight = FontWeight.SemiBold;
@@ -413,6 +415,7 @@ public sealed class MainWindow : Window
         commands.SelectionChanged += (_, _) => { if (commands.SelectedIndex >= 0) _commandTab = commands.SelectedIndex; };
         _details.Children.Add(commands);
         _details.Children.Add(Hint(step.UsesVsCodeIntegration ? "Uses your configured VS Code terminal shell." : "Windows uses cmd.exe; Linux uses Bash."));
+        _details.Children.Add(Hint("Keep passwords and tokens in environment variables. Saved workflows and launchers contain readable commands."));
     }
 
     private void ResetInheritedProjects()
@@ -592,13 +595,18 @@ public sealed class MainWindow : Window
         if (files.Count == 0) return;
         await using var stream = await files[0].OpenReadAsync();
         using var reader = new StreamReader(stream);
-        var loaded = Workflow.FromJson(await reader.ReadToEndAsync());
+        var buffer = new char[1024 * 1024 + 1];
+        var count = await reader.ReadBlockAsync(buffer.AsMemory());
+        if (count == buffer.Length) throw new InvalidDataException("Workflow files must be smaller than 1 million characters.");
+        var json = new string(buffer, 0, count);
+        var loaded = Workflow.FromJson(json);
         if (loaded.Steps is null || loaded.Steps.Any(step => step is null)) throw new InvalidDataException("Invalid actions in workflow file.");
-        _workflow = loaded; _selectedAction = 0; Render(); Log("Workflow opened. Review the commands before running it.");
+        _workflow = loaded; _importedWorkflow = true; _approvedImport = null; _selectedAction = 0; Render(); Log("Workflow opened. Review is required before running or exporting it.");
     }
 
     private async Task SaveAsync()
     {
+        if (!await CheckSecretsAsync()) return;
         var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { Title = "Save workflow", SuggestedFileName = SafeName() + ".json", DefaultExtension = "json", ShowOverwritePrompt = true });
         if (file is null) return;
         await using var stream = await file.OpenWriteAsync();
@@ -611,6 +619,7 @@ public sealed class MainWindow : Window
 
     private async Task ExportAsync()
     {
+        if (!await ApproveImportedAsync() || !await CheckSecretsAsync()) return;
         _workflow.Validate(_format is ExportFormat.WindowsBatch or ExportFormat.WindowsExecutable);
         var extension = _format switch { ExportFormat.WindowsBatch => ".bat", ExportFormat.LinuxShell => ".sh", ExportFormat.WindowsExecutable => ".exe", _ => "" };
         var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { Title = "Export launcher", SuggestedFileName = SafeName() + extension, DefaultExtension = extension.TrimStart('.'), ShowOverwritePrompt = true });
@@ -621,5 +630,41 @@ public sealed class MainWindow : Window
             await LauncherExporter.ExportAsync(_workflow, _format, path, Log, token);
             Log(_format == ExportFormat.WindowsBatch && !string.IsNullOrWhiteSpace(_workflow.IconPath) ? $"Exported batch and shortcut with your icon: {Path.ChangeExtension(path, ".lnk")}" : $"Launcher exported: {path}");
         });
+    }
+
+    private async Task RunWorkflowAsync()
+    {
+        if (!await ApproveImportedAsync()) return;
+        await WithOperationAsync(token => WorkflowRunner.RunAsync(_workflow, Log, token));
+    }
+
+    private async Task<bool> ApproveImportedAsync()
+    {
+        var json = _workflow.ToJson();
+        if (!_importedWorkflow || _approvedImport == json) return true;
+        var approved = await ConfirmReviewAsync("Review imported workflow", "These actions can run programs and project scripts with your permissions. Review both operating systems' commands, folders and application paths. Approve only a workflow you trust. Any edit requires another review.", json, "Trust this workflow");
+        if (approved) _approvedImport = json;
+        return approved;
+    }
+
+    private async Task<bool> CheckSecretsAsync()
+    {
+        var commands = string.Join("\n", _workflow.Steps.SelectMany(step => new[] { step.WindowsCommand, step.LinuxCommand }));
+        if (!System.Text.RegularExpressions.Regex.IsMatch(commands, @"(?i)(password|passwd|pwd|token|secret|api[_-]?key)\s*[:=]\s*[^\s]+|\bBearer\s+[^\s]+")) return true;
+        return await ConfirmReviewAsync("Possible secret in commands", "Passwords and tokens in commands are readable in saved JSON, scripts and EXEs. Use environment variables instead (for example %API_TOKEN% on Windows or $API_TOKEN on Linux). This check may also match variable references; review your commands before continuing.", commands, "Save readable commands anyway");
+    }
+
+    private async Task<bool> ConfirmReviewAsync(string title, string message, string content, string approveText)
+    {
+        var dialog = new Window { Title = title, Width = 680, Height = 520, MinWidth = 480, MinHeight = 360, WindowStartupLocation = WindowStartupLocation.CenterOwner, Background = Background };
+        var panel = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new Thickness(20) };
+        panel.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 14) });
+        var details = new TextBox { Text = content, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontFamily = new FontFamily("Consolas, monospace") };
+        Grid.SetRow(details, 1); panel.Children.Add(details);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Margin = new Thickness(0, 14, 0, 0) };
+        buttons.Children.Add(ActionButton("Cancel", () => dialog.Close(false)));
+        buttons.Children.Add(ActionButton(approveText, () => dialog.Close(true)));
+        Grid.SetRow(buttons, 2); panel.Children.Add(buttons); dialog.Content = panel;
+        return await dialog.ShowDialog<bool>(this);
     }
 }

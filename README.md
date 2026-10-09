@@ -81,6 +81,18 @@ Batch files contain an embedded PowerShell payload, which preserves special char
 
 Commands run with the current user's permissions. Review imported workflows before running them. Project files, VS Code, and command-line tools are not packaged into a launcher and must exist on the target computer. Use target-computer folder paths when exporting for another OS. Keep credentials out of workflows and exported launchers.
 
+## Security behavior
+
+Imported workflows require an explicit review before **Run now** or **Export launcher**. Approval applies to the exact workflow content for the current session; editing or reopening it requires a new review. Opening and saving a workflow do not execute its actions. Project scripts still run with your permissions and must be trusted.
+
+Windows shell launches use system paths for cmd and PowerShell. Guided command tools resolve through absolute PATH directories, excluding the current working folder. Keep your PATH entries trusted. Explicitly selected application files and custom commands remain your responsibility.
+
+Script exports verify the bundled VS Code companion package's SHA-256 hash against a value embedded in the launcher, using a temporary copy before installation. Linux script installation needs `sha256sum` and `mktemp`. This protects a trusted script from a substituted companion; it does not authenticate an attacker-modified script itself or an already-compromised VS Code installation.
+
+Commands remain readable in workflow JSON and exported files. The app warns before save/export when command text appears to contain a secret, but detection is best effort. Prefer runtime environment references such as `%API_TOKEN%` on Windows or `$API_TOKEN` on Linux, configured outside the workflow. An EXE does not encrypt its embedded workflow.
+
+**Re-export existing launchers to receive these protections.** The app and generated launchers are not sandboxed and should not be run as administrator unnecessarily.
+
 ## Build and verify
 
 ```sh

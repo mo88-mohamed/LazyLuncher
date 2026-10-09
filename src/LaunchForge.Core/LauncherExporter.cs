@@ -20,7 +20,7 @@ public static class LauncherExporter
         {
             var folder = step.ExecutionFolder(workflow.ProjectFolderFor(step));
             result.AppendLine($"printf '%s\\n' {ShellQuote("Starting: " + step.Name)}");
-            result.AppendLine($"(cd -- {ShellQuote(folder)} && bash -c {ShellQuote(step.CommandFor(false, workflow.ProjectFolderFor(step)))}){(step.WaitForExit ? "" : " &")}");
+            result.AppendLine($"(cd -- {ShellQuote(folder)} && /bin/bash -c {ShellQuote(step.CommandFor(false, workflow.ProjectFolderFor(step)))}){(step.WaitForExit ? "" : " &")}");
         }
         return result.ToString().Replace("\r\n", "\n");
     }
@@ -30,14 +30,14 @@ public static class LauncherExporter
         workflow.Validate(windows: true);
         // Keep the PowerShell payload below exit /b so cmd never parses its commands or paths.
         var script = new StringBuilder("$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\ntry {\n");
-        if (workflow.Steps.Any(step => step.UsesVsCodeIntegration)) script.AppendLine(VsCodeIntegration.WindowsBootstrap);
+        script.AppendLine(TrustedTools.WindowsPrelude); if (workflow.Steps.Any(step => step.UsesVsCodeIntegration)) script.AppendLine(VsCodeIntegration.WindowsBootstrap);
         foreach (var step in workflow.Steps)
         {
             var folder = step.ExecutionFolder(workflow.ProjectFolderFor(step));
             script.AppendLine($"[Console]::WriteLine({PowerShellQuote("Starting: " + step.Name)})");
             script.AppendLine($"if (-not (Test-Path -LiteralPath {PowerShellQuote(folder)} -PathType Container)) {{ throw 'Working folder does not exist.' }}");
             script.AppendLine("$info = New-Object System.Diagnostics.ProcessStartInfo");
-            script.AppendLine("$info.FileName = 'cmd.exe'");
+            script.AppendLine("$info.FileName = Join-Path $env:SystemRoot 'System32\\cmd.exe'");
             script.AppendLine("$info.UseShellExecute = $false");
             script.AppendLine($"$info.WorkingDirectory = {PowerShellQuote(folder)}");
             script.AppendLine($"$info.Arguments = {PowerShellQuote("/d /s /c \"" + step.CommandFor(true, workflow.ProjectFolderFor(step)) + "\"")}");
@@ -49,7 +49,7 @@ public static class LauncherExporter
         var marker = "# LAUNCHFORGE-POWERSHELL-" + Guid.NewGuid().ToString("N");
         var loader = "$text = [IO.File]::ReadAllText($env:LAUNCHFORGE_SCRIPT); $marker = [Environment]::NewLine + '" + marker
             + "' + [Environment]::NewLine; $offset = $text.IndexOf($marker, [StringComparison]::Ordinal); if ($offset -lt 0) { exit 1 }; & ([scriptblock]::Create($text.Substring($offset + $marker.Length)))";
-        return "@echo off\r\nsetlocal DisableDelayedExpansion\r\nset \"LAUNCHFORGE_LAUNCHER_DIR=%~dp0\"\r\nset \"LAUNCHFORGE_SCRIPT=%~f0\"\r\npowershell.exe -NoLogo -NoProfile -OutputFormat Text -ExecutionPolicy Bypass -Command \""
+        return "@echo off\r\nsetlocal DisableDelayedExpansion\r\nset \"LAUNCHFORGE_LAUNCHER_DIR=%~dp0\"\r\nset \"LAUNCHFORGE_SCRIPT=%~f0\"\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoLogo -NoProfile -OutputFormat Text -ExecutionPolicy Bypass -Command \""
             + loader + "\"\r\nexit /b %errorlevel%\r\n" + marker + "\r\n" + script.ToString().Replace("\r\n", "\n").Replace("\n", "\r\n");
     }
 
@@ -80,7 +80,7 @@ public static class LauncherExporter
         try
         {
             await File.WriteAllTextAsync(Path.Combine(scratch, "workflow.json"), workflow.ToJson(), cancellationToken);
-            foreach (string source in new[] { "Workflow.cs", "WorkflowRunner.cs", "GuidedActions.cs", "ProjectDetector.cs", "VsCodeIntegration.cs" })
+            foreach (string source in new[] { "TrustedTools.cs", "Workflow.cs", "WorkflowRunner.cs", "GuidedActions.cs", "ProjectDetector.cs", "VsCodeIntegration.cs" })
             {
                 using var stream = typeof(LauncherExporter).Assembly.GetManifestResourceStream(source)!;
                 using var reader = new StreamReader(stream);
@@ -110,7 +110,7 @@ public static class LauncherExporter
                     new XElement("EmbeddedResource", new XAttribute("Include", VsCodeIntegration.PackageName), new XAttribute("LogicalName", VsCodeIntegration.PackageName)))));
             if (customIcon) project.Root!.Element("PropertyGroup")!.Add(new XElement("ApplicationIcon", "launcher.ico"));
             project.Save(Path.Combine(scratch, "Launcher.csproj"));
-            var start = new ProcessStartInfo("dotnet") { WorkingDirectory = scratch, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+            var start = new ProcessStartInfo(TrustedTools.Resolve("dotnet")) { WorkingDirectory = scratch, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
             foreach (string argument in new[] { "publish", "Launcher.csproj", "-c", "Release", "-r", windows ? "win-x64" : "linux-x64", "--self-contained", "true", "-o", "publish" }) start.ArgumentList.Add(argument);
             log?.Invoke("Building a standalone launcher. First export may download the .NET runtime.");
             using var process = Process.Start(start) ?? throw new IOException("Install the .NET 10 SDK to export executables.");

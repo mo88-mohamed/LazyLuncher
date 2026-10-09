@@ -153,6 +153,19 @@ try
         Environment.SetEnvironmentVariable("LAUNCHFORGE_TEST_LOG", toolLog);
         Environment.SetEnvironmentVariable("LAUNCHFORGE_TEST_MARKER", installedMarker);
         Environment.SetEnvironmentVariable("PATH", toolsFolder + Path.PathSeparator + oldPath);
+        if (OperatingSystem.IsWindows())
+        {
+            var nodeExecutable = TrustedTools.Resolve("node");
+            File.Copy(nodeExecutable, Path.Combine(projectRoot, "powershell.exe"), true);
+            File.Copy(nodeExecutable, Path.Combine(projectRoot, "cmd.exe"), true);
+            await File.WriteAllTextAsync(Path.Combine(projectRoot, "code.cmd"), "@exit /b 77\r\n");
+            var secureGuided = Make(new WorkflowStep { Kind = ActionKind.RunProject, ProjectKind = ProjectKind.DotNet, ProjectTask = "build", ProjectFile = "App.csproj", WorkingDirectory = projectRoot });
+            Check(await WorkflowRunner.RunAsync(secureGuided) == 0, "Project-local fake PowerShell and cmd executables cannot hijack guided actions");
+            File.Delete(toolLog);
+            await LauncherExporter.ExportAsync(secureGuided, format, launcher);
+            Check(await Execute(launcher) == 0, "Exported batch ignores project-local system executable impostors");
+            File.Delete(toolLog);
+        }
         Check(await WorkflowRunner.RunAsync(linkedWorkflow) == 0 && (await File.ReadAllTextAsync(toolLog)).Contains(javascriptRoot), "JavaScript runner executes inside the inherited project folder");
         File.Delete(toolLog);
         await LauncherExporter.ExportAsync(linkedWorkflow, format, launcher);
@@ -170,6 +183,9 @@ try
         File.Delete(installedMarker); File.Delete(toolLog);
         await LauncherExporter.ExportAsync(vsWorkflow, format, launcher);
         Check(File.Exists(Path.Combine(scratch, VsCodeIntegration.PackageName)) && await Execute(launcher) == 0 && File.Exists(installedMarker), "Exported script includes and bootstraps the VS Code integration");
+        File.Delete(installedMarker);
+        await File.AppendAllTextAsync(Path.Combine(scratch, VsCodeIntegration.PackageName), "tampered");
+        Check(await Execute(launcher) != 0 && !File.Exists(installedMarker), "Modified VS Code sidecar is rejected before installation");
     }
     finally { Environment.SetEnvironmentVariable("PATH", oldPath); Environment.SetEnvironmentVariable("LAUNCHFORGE_TEST_LOG", null); Environment.SetEnvironmentVariable("LAUNCHFORGE_TEST_MARKER", null); }
     var large = Make(Enumerable.Range(0, 35).Select(_ => Command("ver >nul", "true")).ToArray());

@@ -7,7 +7,7 @@ public static class GuidedActions
 {
     public static string ShellQuote(string text) => "'" + text.Replace("'", "'\"'\"'") + "'";
     public static string PowerShellQuote(string text) => "'" + text.Replace("'", "''") + "'";
-    public static string WindowsScript(string script) => "powershell.exe -NoLogo -NoProfile -OutputFormat Text -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes("$ErrorActionPreference='Stop'; " + script));
+    public static string WindowsScript(string script) => "\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoLogo -NoProfile -OutputFormat Text -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes("$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; " + TrustedTools.WindowsPrelude + "\n" + script));
 
     public static string CommandFor(WorkflowStep step, bool windows, string defaultFolder)
     {
@@ -30,7 +30,7 @@ public static class GuidedActions
         if (step.Kind == ActionKind.OpenApplication)
         {
             if (string.IsNullOrWhiteSpace(step.Target)) throw new InvalidDataException("Choose an application to open.");
-            return windows ? WindowsScript($"Start-Process -FilePath {PowerShellQuote(step.Target)}") : Tool(step.Target, [], false);
+            return windows ? WindowsScript($"$application = {PowerShellQuote(step.Target)}; if (-not [IO.Path]::IsPathRooted($application)) {{ $application = Resolve-LaunchForgeTool $application }}; if (-not $application) {{ throw 'Choose an installed application or its full executable path.' }}; Start-Process -FilePath $application") : Tool(step.Target, [], false);
         }
         string executable = "";
         string[] arguments = [];
@@ -117,14 +117,14 @@ public static class GuidedActions
             throw new InvalidDataException("Enter valid Visual Studio file paths.");
         var script = "$project = [IO.Path]::GetFullPath(" + PowerShellQuote(file.Replace('/', '\\')) + "); if (-not (Test-Path -LiteralPath $project -PathType Leaf)) { throw 'Visual Studio project or solution does not exist.' }; "
             + "$ide = " + PowerShellQuote(step.VisualStudioPath) + "; "
-            + "if (-not $ide) { $cmd = Get-Command devenv.exe -ErrorAction SilentlyContinue; if ($cmd) { $ide = $cmd.Source } }; "
+            + "if (-not $ide) { $ide = Resolve-LaunchForgeTool 'devenv' }; "
             + "if (-not $ide) { $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\\Installer\\vswhere.exe'; if (Test-Path -LiteralPath $vswhere) { $ide = & $vswhere -latest -products Microsoft.VisualStudio.Product.Community Microsoft.VisualStudio.Product.Professional Microsoft.VisualStudio.Product.Enterprise -property productPath | Select-Object -First 1 } }; "
             + "if (-not $ide -or -not (Test-Path -LiteralPath $ide -PathType Leaf)) { throw 'Visual Studio was not found. Install Visual Studio or choose devenv.exe in the action settings.' }; "
             + "Start-Process -FilePath $ide -ArgumentList @('/Run', ('\"' + $project + '\"'))";
         return WindowsScript(script);
     }
 
-    private static string Tool(string executable, string[] arguments, bool windows) => windows
-        ? WindowsScript($"& {PowerShellQuote(executable)} {string.Join(" ", arguments.Select(PowerShellQuote))}; if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }}")
+    public static string Tool(string executable, string[] arguments, bool windows) => windows
+        ? WindowsScript($"$tool = Resolve-LaunchForgeTool {PowerShellQuote(executable)}; if (-not $tool) {{ throw 'Required tool was not found on an absolute PATH entry.' }}; & $tool {string.Join(" ", arguments.Select(PowerShellQuote))}; if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }}")
         : ShellQuote(executable) + " " + string.Join(" ", arguments.Select(ShellQuote));
 }
