@@ -4,15 +4,16 @@
   "Steps": [
     {
       "Name": "Open VS Code",
-      "WindowsCommand": "code .",
-      "LinuxCommand": "code .",
+      "Kind": "OpenVsCode",
       "WorkingDirectory": "",
       "WaitForExit": true
     },
     {
       "Name": "Run .NET project",
-      "WindowsCommand": "dotnet run",
-      "LinuxCommand": "dotnet run",
+      "Kind": "RunProject",
+      "ProjectKind": "DotNet",
+      "ProjectTask": "run",
+      "RunIn": "VsCode",
       "WorkingDirectory": "",
       "WaitForExit": true
     }

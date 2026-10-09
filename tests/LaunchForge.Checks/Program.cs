@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 using LaunchForge.Core;
 
 // Dependency-free behavioral checks. All executed commands write only to a temporary folder.
@@ -29,10 +31,15 @@ try
     await LauncherExporter.ExportAsync(exported, format, launcher);
     async Task<int> Execute(string path)
     {
-        var info = new ProcessStartInfo { FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash", UseShellExecute = false };
+        var info = new ProcessStartInfo { FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash", UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
         if (OperatingSystem.IsWindows()) info.Arguments = "/d /s /c \"\"" + path + "\"\"";
         else info.ArgumentList.Add(path);
-        using var process = Process.Start(info)!; await process.WaitForExitAsync(); return process.ExitCode;
+        using var process = Process.Start(info)!;
+        var output = process.StandardOutput.ReadToEndAsync(); var errors = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        var text = await output + await errors;
+        if (process.ExitCode != 0 && process.ExitCode != 7) Console.Error.WriteLine(text.Length > 2000 ? text[^2000..] : text);
+        return process.ExitCode;
     }
     Check(await Execute(launcher) == 0 && File.Exists(Path.Combine(scratch, "exported.txt")), "Exported script runs with spaces, apostrophe, ampersand and percent in path");
     await LauncherExporter.ExportAsync(fail, format, launcher);
@@ -41,10 +48,86 @@ try
     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
     try { await WorkflowRunner.RunAsync(cancellation, cancellationToken: timeout.Token); Check(false, "Cancellation stops the workflow"); }
     catch (OperationCanceledException) { Check(!File.Exists(Path.Combine(scratch, "cancelled.txt")), "Cancellation stops the workflow"); }
+    var iconPath = Path.Combine(scratch, "custom icon.ico");
+    var iconBytes = IconFixture.Create();
+    await File.WriteAllBytesAsync(iconPath, iconBytes);
+    LauncherIcon.Validate(iconPath);
+    exported.IconPath = iconPath;
+    Check(Workflow.FromJson(exported.ToJson()).IconPath == iconPath, "Selected icon survives workflow save/load");
+    var brokenIcon = Path.Combine(scratch, "broken.ico");
+    await File.WriteAllTextAsync(brokenIcon, "invalid icon contents long enough");
+    try { LauncherIcon.Validate(brokenIcon); Check(false, "Invalid icon rejected"); } catch (InvalidDataException) { Check(true, "Invalid icon rejected"); }
+    var projectRoot = Path.Combine(scratch, "projects"); Directory.CreateDirectory(projectRoot);
+    await File.WriteAllTextAsync(Path.Combine(projectRoot, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>");
+    await File.WriteAllTextAsync(Path.Combine(projectRoot, "Broken.csproj"), "invalid XML");
+    Directory.CreateDirectory(Path.Combine(projectRoot, "frontend"));
+    await File.WriteAllTextAsync(Path.Combine(projectRoot, "frontend", "package.json"), "{\"scripts\":{\"start\":\"node app.js\",\"dev\":\"vite\",\"test\":\"node --test\"}}");
+    await File.WriteAllTextAsync(Path.Combine(projectRoot, "main.py"), "print('example')");
+    Directory.CreateDirectory(Path.Combine(projectRoot, "node_modules", "ignored"));
+    await File.WriteAllTextAsync(Path.Combine(projectRoot, "node_modules", "ignored", "package.json"), "{\"scripts\":{\"start\":\"bad\"}}");
+    var detected = ProjectDetector.Detect(projectRoot);
+    Check(detected.Count == 3 && detected.Any(project => project.Kind == ProjectKind.DotNet) && detected.Any(project => project.Kind == ProjectKind.Python), "Detects .NET, Node and Python while excluding dependencies");
+    Check(detected.Single(project => project.Kind == ProjectKind.Node).Tasks[0].Value == "dev", "Node task detection prefers the development server");
+    var custom = Command("echo custom", "printf custom");
+    Check(custom.Kind == ActionKind.CustomCommand && custom.CommandFor(true, scratch) == "echo custom", "Existing custom commands remain unchanged");
+    var vsTask = new WorkflowStep { Kind = ActionKind.RunProject, Name = "Start my project", ProjectKind = ProjectKind.Node, ProjectTask = "dev", RunIn = RunLocation.VsCode };
+    var vsWorkflow = Make(vsTask);
+    Check(vsTask.CommandFor(false, "/tmp/project").Contains("vscode://launchforge.launcher/run?request="), "Guided project task routes to VS Code");
+    var oldPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+    var toolsFolder = Path.Combine(scratch, "tools"); Directory.CreateDirectory(toolsFolder);
+    var toolLog = Path.Combine(scratch, "tool-args.txt");
+    var installedMarker = Path.Combine(scratch, "extension-installed.txt");
+    if (OperatingSystem.IsWindows())
+    {
+        await File.WriteAllTextAsync(Path.Combine(toolsFolder, "dotnet.cmd"), "@echo off\r\necho %*>>\"%LAUNCHFORGE_TEST_LOG%\"\r\nexit /b 0\r\n");
+        await File.WriteAllTextAsync(Path.Combine(toolsFolder, "code.cmd"), "@echo off\r\nif \"%~1\"==\"--list-extensions\" (\r\n if exist \"%LAUNCHFORGE_TEST_MARKER%\" echo launchforge.launcher\r\n exit /b 0\r\n)\r\nif \"%~1\"==\"--install-extension\" (\r\n if not exist \"%~2\" exit /b 8\r\n echo installed>\"%LAUNCHFORGE_TEST_MARKER%\"\r\n exit /b 0\r\n)\r\necho %*>>\"%LAUNCHFORGE_TEST_LOG%\"\r\nexit /b 0\r\n");
+    }
+    else
+    {
+        await File.WriteAllTextAsync(Path.Combine(toolsFolder, "dotnet"), $"#!/bin/bash\nprintf '%s\\n' \"$*\" >> {GuidedActions.ShellQuote(toolLog)}\n");
+        await File.WriteAllTextAsync(Path.Combine(toolsFolder, "code"), $"#!/bin/bash\nif [ \"$1\" = --list-extensions ]; then [ ! -f {GuidedActions.ShellQuote(installedMarker)} ] || echo launchforge.launcher; exit 0; fi\nif [ \"$1\" = --install-extension ]; then test -f \"$2\" || exit 8; touch {GuidedActions.ShellQuote(installedMarker)}; exit 0; fi\nprintf '%s\\n' \"$*\" >> {GuidedActions.ShellQuote(toolLog)}\n");
+        foreach (var tool in new[] { "code", "dotnet" }) File.SetUnixFileMode(Path.Combine(toolsFolder, tool), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+    try
+    {
+        Environment.SetEnvironmentVariable("LAUNCHFORGE_TEST_LOG", toolLog);
+        Environment.SetEnvironmentVariable("LAUNCHFORGE_TEST_MARKER", installedMarker);
+        Environment.SetEnvironmentVariable("PATH", toolsFolder + Path.PathSeparator + oldPath);
+        var guided = Make(new WorkflowStep { Kind = ActionKind.RunProject, ProjectKind = ProjectKind.DotNet, ProjectTask = "build", ProjectFile = "App.csproj" });
+        Check(await WorkflowRunner.RunAsync(guided) == 0 && (await File.ReadAllTextAsync(toolLog)).Contains("build"), "Guided action executes the selected project task without a user command");
+        File.Delete(toolLog);
+        Check(await WorkflowRunner.RunAsync(vsWorkflow) == 0 && File.Exists(installedMarker), "VS Code integration bootstraps its bundled extension on first use");
+        var uriLine = (await File.ReadAllLinesAsync(toolLog)).Single(line => line.Contains("vscode://"));
+        var payload = uriLine[(uriLine.IndexOf("request=", StringComparison.Ordinal) + 8)..].Trim().Trim('"');
+        payload = payload.Replace('-', '+').Replace('_', '/'); payload = payload.PadRight((payload.Length + 3) / 4 * 4, '=');
+        using var request = JsonDocument.Parse(Convert.FromBase64String(payload));
+        Check(request.RootElement.GetProperty("folder").GetString() == scratch && request.RootElement.GetProperty("args")[1].GetString() == "dev", "VS Code handoff preserves folder and task, including special characters");
+        File.Delete(installedMarker); File.Delete(toolLog);
+        await LauncherExporter.ExportAsync(vsWorkflow, format, launcher);
+        Check(File.Exists(Path.Combine(scratch, VsCodeIntegration.PackageName)) && await Execute(launcher) == 0 && File.Exists(installedMarker), "Exported script includes and bootstraps the VS Code integration");
+    }
+    finally { Environment.SetEnvironmentVariable("PATH", oldPath); Environment.SetEnvironmentVariable("LAUNCHFORGE_TEST_LOG", null); Environment.SetEnvironmentVariable("LAUNCHFORGE_TEST_MARKER", null); }
+    var large = Make(Enumerable.Range(0, 35).Select(_ => Command("ver >nul", "true")).ToArray());
+    await LauncherExporter.ExportAsync(large, format, launcher);
+    Check(await Execute(launcher) == 0, "Large exported workflows avoid the Windows command-line limit");
+    if (OperatingSystem.IsWindows())
+    {
+        await LauncherExporter.ExportAsync(exported, ExportFormat.WindowsBatch, launcher);
+        var shortcutPath = Path.ChangeExtension(launcher, ".lnk");
+        dynamic shortcutShell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")!)!;
+        dynamic shortcut = shortcutShell.CreateShortcut(shortcutPath);
+        try
+        {
+            Check(File.Exists(shortcutPath) && ((string)shortcut.TargetPath).Equals(Path.GetFullPath(launcher), StringComparison.OrdinalIgnoreCase), "Icon shortcut targets the exported batch file");
+            Check(((string)shortcut.IconLocation).Contains("success.launchforge.ico") && File.ReadAllBytes(Path.Combine(scratch, "success.launchforge.ico")).SequenceEqual(iconBytes), "Batch shortcut uses a copied, independent icon file");
+        }
+        finally { Marshal.FinalReleaseComObject(shortcut); Marshal.FinalReleaseComObject(shortcutShell); }
+    }
     if (args.Contains("--exe"))
     {
         var executable = Path.Combine(scratch, OperatingSystem.IsWindows() ? "launcher.exe" : "launcher");
         await LauncherExporter.ExportAsync(exported, OperatingSystem.IsWindows() ? ExportFormat.WindowsExecutable : ExportFormat.LinuxExecutable, executable, Console.WriteLine);
+        if (OperatingSystem.IsWindows()) Check(IconFixture.ReadEmbeddedImage(executable).SequenceEqual(iconBytes.Skip(22)), "Standalone EXE embeds the selected icon in its native resources");
         File.Delete(Path.Combine(scratch, "exported.txt"));
         using var process = Process.Start(new ProcessStartInfo(executable) { UseShellExecute = false })!;
         await process.WaitForExitAsync();

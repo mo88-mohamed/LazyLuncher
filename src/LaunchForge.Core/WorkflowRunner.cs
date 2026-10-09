@@ -8,19 +8,26 @@ public static class WorkflowRunner
     {
         bool windows = OperatingSystem.IsWindows();
         workflow.Validate(windows);
+        bool integrationReady = false;
         foreach (var step in workflow.Steps)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var folder = string.IsNullOrWhiteSpace(step.WorkingDirectory) ? workflow.WorkingDirectory : step.WorkingDirectory;
+            var folder = step.ExecutionFolder(workflow.WorkingDirectory);
             if (!Directory.Exists(folder)) throw new DirectoryNotFoundException($"Folder does not exist: {folder}");
+            if (step.UsesVsCodeIntegration && !integrationReady)
+            {
+                await VsCodeIntegration.EnsureInstalledAsync(log, cancellationToken);
+                integrationReady = true;
+            }
             var info = new ProcessStartInfo
             {
                 FileName = windows ? "cmd.exe" : "/bin/bash",
                 WorkingDirectory = folder,
                 UseShellExecute = false
             };
-            if (windows) info.Arguments = "/d /s /c \"" + step.WindowsCommand + "\"";
-            else { info.ArgumentList.Add("-c"); info.ArgumentList.Add(step.LinuxCommand); }
+            var command = step.CommandFor(windows, workflow.WorkingDirectory);
+            if (windows) info.Arguments = "/d /s /c \"" + command + "\"";
+            else { info.ArgumentList.Add("-c"); info.ArgumentList.Add(command); }
             log?.Invoke($"Starting: {step.Name}");
             using var process = Process.Start(info) ?? throw new IOException($"Could not start '{step.Name}'.");
             if (!step.WaitForExit) continue;

@@ -1,0 +1,14 @@
+{
+  "name": "launcher",
+  "displayName": "LaunchForge Terminal Integration",
+  "description": "Run LaunchForge project actions and custom commands inside VS Code terminals.",
+  "version": "0.1.0",
+  "publisher": "launchforge",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "main": "./extension.js",
+  "extensionKind": ["ui"],
+  "activationEvents": ["onUri", "onStartupFinished"],
+  "capabilities": { "untrustedWorkspaces": { "supported": "limited", "description": "LaunchForge does not execute tasks until the workspace is trusted." } },
+  "contributes": { "taskDefinitions": [{ "type": "launchforge", "required": ["id"], "properties": { "id": { "type": "string", "description": "LaunchForge action identifier" } } }] }
+}

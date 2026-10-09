@@ -2,5 +2,14 @@
   <ItemGroup>
     <EmbeddedResource Include="Workflow.cs" LogicalName="Workflow.cs" />
     <EmbeddedResource Include="WorkflowRunner.cs" LogicalName="WorkflowRunner.cs" />
+    <EmbeddedResource Include="GuidedActions.cs" LogicalName="GuidedActions.cs" />
+    <EmbeddedResource Include="ProjectDetector.cs" LogicalName="ProjectDetector.cs" />
+    <EmbeddedResource Include="VsCodeIntegration.cs" LogicalName="VsCodeIntegration.cs" />
+    <EmbeddedResource Include="$(BaseIntermediateOutputPath)$(Configuration)/LaunchForge.VSCode.vsix" LogicalName="LaunchForge.VSCode.vsix" />
+    <VSCodePackageFiles Include="../../integrations/vscode/vsix/**/*" />
   </ItemGroup>
+  <Target Name="PackageVSCodeIntegration" BeforeTargets="PrepareForBuild" Inputs="@(VSCodePackageFiles)" Outputs="$(BaseIntermediateOutputPath)$(Configuration)/LaunchForge.VSCode.vsix">
+    <MakeDir Directories="$(BaseIntermediateOutputPath)$(Configuration)" />
+    <ZipDirectory SourceDirectory="$(MSBuildThisFileDirectory)../../integrations/vscode/vsix" DestinationFile="$(BaseIntermediateOutputPath)$(Configuration)/LaunchForge.VSCode.vsix" Overwrite="true" />
+  </Target>
 </Project>

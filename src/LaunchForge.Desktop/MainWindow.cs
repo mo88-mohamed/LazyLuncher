@@ -25,6 +25,13 @@ public sealed class MainWindow : Window
     private ExportFormat _format = OperatingSystem.IsWindows() ? ExportFormat.WindowsBatch : ExportFormat.LinuxShell;
     private int _selectedAction;
     private int _commandTab = OperatingSystem.IsWindows() ? 0 : 1;
+    private readonly Dictionary<string, IReadOnlyList<DetectedProject>> _projects = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private static readonly (ActionKind Kind, string Label)[] ActionTypes =
+    [
+        (ActionKind.RunProject, "Run a project"), (ActionKind.OpenVsCode, "Open project in VS Code"),
+        (ActionKind.OpenWebsite, "Open a website"), (ActionKind.OpenFolder, "Open a folder"),
+        (ActionKind.OpenApplication, "Open an application"), (ActionKind.CustomCommand, "Custom command")
+    ];
 
     public MainWindow()
     {
@@ -71,8 +78,8 @@ public sealed class MainWindow : Window
         WorkingDirectory = Environment.CurrentDirectory,
         Steps =
         [
-            new() { Name = "Open project in VS Code", WindowsCommand = "code .", LinuxCommand = "code .", WaitForExit = true },
-            new() { Name = "Run project", WindowsCommand = "dotnet run", LinuxCommand = "dotnet run", WaitForExit = true }
+            new() { Kind = ActionKind.OpenVsCode, Name = "Open project in VS Code" },
+            new() { Kind = ActionKind.RunProject, Name = "Run project", RunIn = RunLocation.VsCode }
         ]
     };
 
@@ -119,6 +126,8 @@ public sealed class MainWindow : Window
             {
                 workflow.WorkingDirectory = path;
                 folderInput.Text = path;
+                var projectStep = workflow.Steps.FirstOrDefault(step => step.Kind == ActionKind.RunProject && string.IsNullOrWhiteSpace(step.WorkingDirectory));
+                if (projectStep is not null) await DetectProjectsAsync(projectStep, applyToAll: true);
             }
         });
         browse.Margin = new Thickness(6, 0, 0, 0); Grid.SetColumn(browse, 1); folderRow.Children.Add(browse);
@@ -166,19 +175,32 @@ public sealed class MainWindow : Window
         Grid.SetRow(workspace, 2); _editor.Children.Add(workspace);
         RenderDetails();
 
-        var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Margin = new Thickness(0, 0, 0, 12) };
+        var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"), Margin = new Thickness(0, 0, 0, 12) };
         var formats = Enum.GetValues<ExportFormat>();
         var choice = new ComboBox { ItemsSource = new[] { "Windows batch (.bat)", "Linux script (.sh)", "Windows EXE (x64)", "Linux binary (x64)" }, SelectedIndex = Array.IndexOf(formats, _format), HorizontalAlignment = HorizontalAlignment.Stretch, MaxWidth = 290, FontSize = 12 };
         choice.HorizontalAlignment = HorizontalAlignment.Left;
         choice.MinWidth = 200;
-        choice.SelectionChanged += (_, _) => { if (choice.SelectedIndex >= 0) _format = formats[choice.SelectedIndex]; };
+        choice.SelectionChanged += (_, _) => { if (choice.SelectedIndex >= 0 && _format != formats[choice.SelectedIndex]) { _format = formats[choice.SelectedIndex]; Render(); } };
         ToolTip.SetTip(choice, "EXE and binary exports bundle the runtime and need the .NET SDK to build. Commands and project files must exist on the target computer.");
         footer.Children.Add(choice);
+        var icon = NewButton(string.IsNullOrWhiteSpace(workflow.IconPath) ? "Icon" : "Icon \u2713");
+        icon.IsEnabled = _format is ExportFormat.WindowsBatch or ExportFormat.WindowsExecutable;
+        if (!string.IsNullOrWhiteSpace(workflow.IconPath)) icon.Foreground = Accent;
+        ToolTip.SetTip(icon, icon.IsEnabled ? (string.IsNullOrWhiteSpace(workflow.IconPath) ? "Choose a custom launcher icon" : workflow.IconPath) : "Custom icons are available for Windows exports.");
+        var iconMenu = new StackPanel { Spacing = 10, MaxWidth = 290 };
+        iconMenu.Children.Add(new TextBlock { Text = string.IsNullOrWhiteSpace(workflow.IconPath) ? "Default launcher icon" : Path.GetFileName(workflow.IconPath), FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
+        var iconFlyout = new Flyout { Content = iconMenu };
+        iconMenu.Children.Add(AsyncButton("Choose .ico file...", async () => { iconFlyout.Hide(); await PickIconAsync(); }));
+        var resetIcon = ActionButton("Use default icon", () => { workflow.IconPath = ""; iconFlyout.Hide(); Render(); });
+        resetIcon.IsEnabled = !string.IsNullOrWhiteSpace(workflow.IconPath); iconMenu.Children.Add(resetIcon);
+        iconMenu.Children.Add(Hint(_format == ExportFormat.WindowsBatch ? "Creates a shortcut beside the batch file with your icon." : "Embeds your icon directly into the exported EXE."));
+        icon.Flyout = iconFlyout;
+        icon.Margin = new Thickness(8, 0, 0, 0); Grid.SetColumn(icon, 1); footer.Children.Add(icon);
         var run = AsyncButton("Run now", () => WithOperationAsync(token => WorkflowRunner.RunAsync(_workflow, Log, token)));
-        run.Margin = new Thickness(8, 0, 8, 0); Grid.SetColumn(run, 1); footer.Children.Add(run);
+        run.Margin = new Thickness(8, 0, 8, 0); Grid.SetColumn(run, 2); footer.Children.Add(run);
         var export = AsyncButton("Export launcher", ExportAsync);
         export.Background = Accent; export.Foreground = Brush.Parse("#082F2C"); export.FontWeight = FontWeight.SemiBold;
-        Grid.SetColumn(export, 2); footer.Children.Add(export);
+        Grid.SetColumn(export, 3); footer.Children.Add(export);
         Grid.SetRow(footer, 3);
         _editor.Children.Add(footer);
     }
@@ -187,7 +209,7 @@ public sealed class MainWindow : Window
 
     private void AddAction()
     {
-        _workflow.Steps.Add(new WorkflowStep { Name = $"Action {_workflow.Steps.Count + 1}" });
+        _workflow.Steps.Add(new WorkflowStep { Kind = ActionKind.RunProject, Name = "Run project" });
         _selectedAction = _workflow.Steps.Count - 1;
         Render();
     }
@@ -223,8 +245,70 @@ public sealed class MainWindow : Window
         remove.Foreground = Brush.Parse("#FCA5A5"); controls.Children.Add(remove);
         Grid.SetColumn(controls, 1); heading.Children.Add(controls);
         _details.Children.Add(heading);
+        var kind = new ComboBox { ItemsSource = ActionTypes.Select(item => item.Label).ToArray(), SelectedIndex = Array.FindIndex(ActionTypes, item => item.Kind == step.Kind), HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 13 };
+        kind.SelectionChanged += (_, _) =>
+        {
+            if (kind.SelectedIndex < 0 || step.Kind == ActionTypes[kind.SelectedIndex].Kind) return;
+            var oldLabel = ActionTypes.First(item => item.Kind == step.Kind).Label;
+            step.Kind = ActionTypes[kind.SelectedIndex].Kind;
+            if (step.Name is "Run project" or "Action" || step.Name == oldLabel) { step.Name = ActionTypes[kind.SelectedIndex].Label; _actionLabels[position].Text = ActionTitle(position, step); }
+            RenderDetails();
+        };
+        _details.Children.Add(Labeled("Action", kind));
         var actionLabel = _actionLabels[position];
-        _details.Children.Add(Field("Action name", step.Name, value => { step.Name = value; actionLabel.Text = ActionTitle(position, step); }));
+        Control? taskChoice = null;
+        if (step.Kind == ActionKind.RunProject) taskChoice = RenderProjectOptions(step);
+        else if (step.Kind == ActionKind.CustomCommand) RenderCustomCommands(step);
+        else if (step.Kind == ActionKind.OpenWebsite) _details.Children.Add(Field("Website address", step.Target, value => step.Target = value, "https://localhost:5001"));
+        else
+        {
+            bool application = step.Kind == ActionKind.OpenApplication;
+            _details.Children.Add(Field(application ? "Application" : "Folder", step.Target, value => step.Target = value, application ? "Select an application or enter its name" : "Leave blank to use the project folder"));
+            _details.Children.Add(AsyncButton(application ? "Browse application..." : "Browse folder...", async () =>
+            {
+                if (application)
+                {
+                    var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Choose application", AllowMultiple = false });
+                    if (files.Count > 0 && files[0].TryGetLocalPath() is { } path) step.Target = path;
+                }
+                else
+                {
+                    var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Choose folder", AllowMultiple = false });
+                    if (folders.Count > 0 && folders[0].TryGetLocalPath() is { } path) step.Target = path;
+                }
+                RenderDetails();
+            }));
+        }
+        if (step.Kind is ActionKind.RunProject or ActionKind.CustomCommand)
+        {
+            var location = new ComboBox { ItemsSource = new[] { "Outside VS Code", "VS Code terminal" }, SelectedIndex = (int)step.RunIn, HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12 };
+            location.SelectionChanged += (_, _) => { if (location.SelectedIndex >= 0 && (int)step.RunIn != location.SelectedIndex) { step.RunIn = (RunLocation)location.SelectedIndex; RenderDetails(); } };
+            var locationField = Labeled("Run in", location);
+            if (taskChoice is null) _details.Children.Add(locationField);
+            else
+            {
+                var taskRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
+                taskChoice.Margin = new Thickness(0, 0, 10, 0); taskRow.Children.Add(taskChoice);
+                Grid.SetColumn(locationField, 1); taskRow.Children.Add(locationField); _details.Children.Add(taskRow);
+            }
+        }
+        if (step.UsesVsCodeIntegration)
+            _details.Children.Add(Hint("First use sets up the VS Code integration and asks you to approve the task. Later actions do not wait for this task to finish."));
+        else
+        {
+            var wait = new CheckBox { Content = "Wait before starting the next action", IsChecked = step.WaitForExit, FontSize = 12 };
+            wait.IsCheckedChanged += (_, _) => step.WaitForExit = wait.IsChecked == true;
+            ToolTip.SetTip(wait, "When enabled, stop the workflow if this action fails. When disabled, the action keeps running independently.");
+            _details.Children.Add(wait);
+        }
+        var advanced = new StackPanel { Spacing = 10, Margin = new Thickness(0, 8, 0, 0) };
+        advanced.Children.Add(Field("Action name", step.Name, value => { step.Name = value; actionLabel.Text = ActionTitle(position, step); }));
+        advanced.Children.Add(Field("Working folder", step.WorkingDirectory, value => step.WorkingDirectory = value, "Leave blank to use the project folder"));
+        _details.Children.Add(new Expander { Header = "Advanced options", Content = advanced, IsExpanded = !string.IsNullOrWhiteSpace(step.WorkingDirectory), HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12, Background = Surface, BorderBrush = Outline, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(7) });
+    }
+
+    private void RenderCustomCommands(WorkflowStep step)
+    {
         var windows = Field("Command", step.WindowsCommand, value => step.WindowsCommand = value, "e.g. code . or dotnet run", command: true);
         var linux = Field("Command", step.LinuxCommand, value => step.LinuxCommand = value, "e.g. code . or npm run dev", command: true);
         windows.Margin = linux.Margin = new Thickness(0, 10, 0, 0);
@@ -235,14 +319,91 @@ public sealed class MainWindow : Window
         };
         commands.SelectionChanged += (_, _) => { if (commands.SelectedIndex >= 0) _commandTab = commands.SelectedIndex; };
         _details.Children.Add(commands);
-        _details.Children.Add(Hint("Use the tab for the platform you want to export."));
-        var wait = new CheckBox { Content = "Wait before starting the next action", IsChecked = step.WaitForExit, FontSize = 12 };
-        wait.IsCheckedChanged += (_, _) => step.WaitForExit = wait.IsChecked == true;
-        ToolTip.SetTip(wait, "When enabled, stop the workflow if this action fails. When disabled, the action keeps running independently.");
-        _details.Children.Add(wait);
-        var overrideField = Field("Working folder", step.WorkingDirectory, value => step.WorkingDirectory = value, "Leave blank to use the project folder");
-        overrideField.Margin = new Thickness(0, 8, 0, 0);
-        _details.Children.Add(new Expander { Header = "Use a different folder", Content = overrideField, IsExpanded = !string.IsNullOrWhiteSpace(step.WorkingDirectory), HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12, Background = Surface, BorderBrush = Outline, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(7) });
+        _details.Children.Add(Hint(step.UsesVsCodeIntegration ? "Uses your configured VS Code terminal shell." : "Windows uses cmd.exe; Linux uses Bash."));
+    }
+
+    private Control? RenderProjectOptions(WorkflowStep step)
+    {
+        var folder = string.IsNullOrWhiteSpace(step.WorkingDirectory) ? _workflow.WorkingDirectory : step.WorkingDirectory;
+        if (_projects.TryGetValue(folder, out var detected) && detected.Count > 0)
+        {
+            int index = detected.ToList().FindIndex(project => project.Kind == step.ProjectKind && project.File == step.ProjectFile);
+            var projectChoice = new ComboBox { ItemsSource = detected.Select(project => project.Label).ToArray(), SelectedIndex = index, HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12, PlaceholderText = "Choose a detected project" };
+            projectChoice.SelectionChanged += (_, _) =>
+            {
+                if (projectChoice.SelectedIndex < 0) return;
+                var project = detected[projectChoice.SelectedIndex];
+                if (step.ProjectKind == project.Kind && step.ProjectFile == project.File) return;
+                ApplyProject(step, project); RenderDetails();
+            };
+            var projectRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+            projectRow.Children.Add(projectChoice);
+            var refresh = AsyncButton("Detect", () => DetectProjectsAsync(step)); refresh.Margin = new Thickness(6, 0, 0, 0); Grid.SetColumn(refresh, 1); projectRow.Children.Add(refresh);
+            _details.Children.Add(Labeled("Project", projectRow));
+            if (index >= 0) return TaskChoice(step, detected[index].Tasks);
+        }
+        else
+        {
+            _details.Children.Add(AsyncButton("Detect project", () => DetectProjectsAsync(step)));
+            _details.Children.Add(Hint("Choose a folder above and detect its projects, or select a type."));
+            var type = new ComboBox { ItemsSource = new[] { "Detect automatically", ".NET", "Node.js", "Python" }, SelectedIndex = (int)step.ProjectKind, HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12 };
+            type.SelectionChanged += (_, _) => { if (type.SelectedIndex >= 0 && (int)step.ProjectKind != type.SelectedIndex) { step.ProjectKind = (ProjectKind)type.SelectedIndex; step.ProjectTask = ""; RenderDetails(); } };
+            _details.Children.Add(Labeled("Project type", type));
+            if (step.ProjectKind != ProjectKind.Auto)
+                _details.Children.Add(Field("Project file (relative to project folder)", step.ProjectFile, value => step.ProjectFile = value, step.ProjectKind == ProjectKind.DotNet ? "MyApp.csproj (optional)" : step.ProjectKind == ProjectKind.Node ? "package.json (optional)" : "main.py"));
+            if (step.ProjectKind == ProjectKind.DotNet) return TaskChoice(step, ProjectDetector.DotNetTasks);
+            if (step.ProjectKind == ProjectKind.Node) return Field("Task name", step.ProjectTask, value => step.ProjectTask = value, "dev or start");
+        }
+        return null;
+    }
+
+    private static Control TaskChoice(WorkflowStep step, IReadOnlyList<ProjectTask> tasks)
+    {
+        if (tasks.Count == 0) return Hint("No runnable tasks found. Use Custom command to define one.");
+        int index = tasks.ToList().FindIndex(task => task.Value == step.ProjectTask);
+        if (index < 0) { index = 0; step.ProjectTask = tasks[0].Value; }
+        var choice = new ComboBox { ItemsSource = tasks.Select(task => task.Label).ToArray(), SelectedIndex = index, HorizontalAlignment = HorizontalAlignment.Stretch, FontSize = 12 };
+        choice.SelectionChanged += (_, _) => { if (choice.SelectedIndex >= 0) step.ProjectTask = tasks[choice.SelectedIndex].Value; };
+        return Labeled("Task", choice);
+    }
+
+    private async Task DetectProjectsAsync(WorkflowStep step, bool applyToAll = false)
+    {
+        var workflow = _workflow;
+        var folder = string.IsNullOrWhiteSpace(step.WorkingDirectory) ? workflow.WorkingDirectory : step.WorkingDirectory;
+        await WithOperationAsync(async token =>
+        {
+            Log("Detecting projects...");
+            var detected = await Task.Run(() => ProjectDetector.Detect(folder), token);
+            token.ThrowIfCancellationRequested();
+            _projects[folder] = detected;
+            if (detected.Count > 0)
+            {
+                foreach (var candidate in applyToAll ? workflow.Steps.Where(item => item.Kind == ActionKind.RunProject && string.IsNullOrWhiteSpace(item.WorkingDirectory)) : [step])
+                    ApplyProject(candidate, detected.FirstOrDefault(project => project.Kind == candidate.ProjectKind && project.File == candidate.ProjectFile) ?? detected[0]);
+            }
+            RenderDetails();
+            Log(detected.Count == 0 ? "No supported project found. Choose a project type or use Custom command." : $"Found {detected.Count} project(s). Select your project and task.");
+        });
+    }
+
+    private static void ApplyProject(WorkflowStep step, DetectedProject project)
+    {
+        step.ProjectKind = project.Kind; step.ProjectFile = project.File;
+        if (!project.Tasks.Any(task => task.Value == step.ProjectTask)) step.ProjectTask = project.Tasks.FirstOrDefault()?.Value ?? "";
+    }
+
+    private static Control Labeled(string label, Control control)
+    {
+        var panel = new StackPanel { Spacing = 5 }; panel.Children.Add(Label(label)); panel.Children.Add(control); return panel;
+    }
+
+    private async Task PickIconAsync()
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Choose launcher icon", AllowMultiple = false, FileTypeFilter = [new FilePickerFileType("Windows icon") { Patterns = ["*.ico"] }] });
+        if (files.Count == 0) return;
+        var path = files[0].TryGetLocalPath() ?? throw new IOException("Choose a local icon file.");
+        LauncherIcon.Validate(path); _workflow.IconPath = path; Render(); Log("Custom icon selected.");
     }
 
     private static TextBlock Label(string text) => new() { Text = text, FontSize = 12, Foreground = Muted };
@@ -333,6 +494,10 @@ public sealed class MainWindow : Window
         var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { Title = "Export launcher", SuggestedFileName = SafeName() + extension, DefaultExtension = extension.TrimStart('.'), ShowOverwritePrompt = true });
         if (file is null) return;
         var path = file.TryGetLocalPath() ?? throw new IOException("Choose a local destination for the launcher.");
-        await WithOperationAsync(async token => { await LauncherExporter.ExportAsync(_workflow, _format, path, Log, token); Log($"Launcher exported: {path}"); });
+        await WithOperationAsync(async token =>
+        {
+            await LauncherExporter.ExportAsync(_workflow, _format, path, Log, token);
+            Log(_format == ExportFormat.WindowsBatch && !string.IsNullOrWhiteSpace(_workflow.IconPath) ? $"Exported batch and shortcut with your icon: {Path.ChangeExtension(path, ".lnk")}" : $"Launcher exported: {path}");
+        });
     }
 }
