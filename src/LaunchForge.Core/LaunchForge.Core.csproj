@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <EmbeddedResource Include="Workflow.cs" LogicalName="Workflow.cs" />
+    <EmbeddedResource Include="WorkflowRunner.cs" LogicalName="WorkflowRunner.cs" />
+  </ItemGroup>
+</Project>

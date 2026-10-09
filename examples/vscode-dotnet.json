@@ -1,0 +1,20 @@
+{
+  "Name": "Open and run my project",
+  "WorkingDirectory": "C:\\Projects\\MyApp",
+  "Steps": [
+    {
+      "Name": "Open VS Code",
+      "WindowsCommand": "code .",
+      "LinuxCommand": "code .",
+      "WorkingDirectory": "",
+      "WaitForExit": true
+    },
+    {
+      "Name": "Run .NET project",
+      "WindowsCommand": "dotnet run",
+      "LinuxCommand": "dotnet run",
+      "WorkingDirectory": "",
+      "WaitForExit": true
+    }
+  ]
+}

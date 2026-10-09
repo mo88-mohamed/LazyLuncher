@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LaunchForge.Core/LaunchForge.Core.csproj" />
+    <Project Path="src/LaunchForge.Desktop/LaunchForge.Desktop.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LaunchForge.Checks/LaunchForge.Checks.csproj" />
+  </Folder>
+</Solution>

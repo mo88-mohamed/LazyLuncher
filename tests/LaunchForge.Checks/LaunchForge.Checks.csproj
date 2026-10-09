@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../src/LaunchForge.Core/LaunchForge.Core.csproj" /></ItemGroup>
+</Project>
